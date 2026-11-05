@@ -248,6 +248,14 @@ bool VU1Interpreter::calculateFmacExactResult(uint32_t component,
         return operand(m_state.acc[lane]);
     };
 
+    // TEKKEN_FMAC_PRODUCT_CLAMP_V1: saturate the intermediate product before
+    // adding/subtracting ACC; final-range checks must not undo cancellation.
+    const auto product = [](long double left, long double right)
+    {
+        const long double maximum = static_cast<long double>(std::numeric_limits<float>::max());
+        return std::clamp(left * right, -maximum, maximum);
+    };
+
     const long double q = operand(m_state.q);
     const long double i = operand(m_state.i);
 
@@ -258,9 +266,9 @@ bool VU1Interpreter::calculateFmacExactResult(uint32_t component,
         else if (op <= 0x07u)
             result = vs(component) - vt(op & 3u);
         else if (op <= 0x0Bu)
-            result = acc(component) + vs(component) * vt(op & 3u);
+            result = acc(component) + product(vs(component), vt(op & 3u));
         else if (op <= 0x0Fu)
-            result = acc(component) - vs(component) * vt(op & 3u);
+            result = acc(component) - product(vs(component), vt(op & 3u));
         else if (op >= 0x18u && op <= 0x1Bu)
             result = vs(component) * vt(op & 3u);
         else
@@ -277,31 +285,31 @@ bool VU1Interpreter::calculateFmacExactResult(uint32_t component,
                 result = vs(component) + q;
                 break;
             case 0x21u:
-                result = acc(component) + vs(component) * q;
+                result = acc(component) + product(vs(component), q);
                 break;
             case 0x22u:
                 result = vs(component) + i;
                 break;
             case 0x23u:
-                result = acc(component) + vs(component) * i;
+                result = acc(component) + product(vs(component), i);
                 break;
             case 0x24u:
                 result = vs(component) - q;
                 break;
             case 0x25u:
-                result = acc(component) - vs(component) * q;
+                result = acc(component) - product(vs(component), q);
                 break;
             case 0x26u:
                 result = vs(component) - i;
                 break;
             case 0x27u:
-                result = acc(component) - vs(component) * i;
+                result = acc(component) - product(vs(component), i);
                 break;
             case 0x28u:
                 result = vs(component) + vt(component);
                 break;
             case 0x29u:
-                result = acc(component) + vs(component) * vt(component);
+                result = acc(component) + product(vs(component), vt(component));
                 break;
             case 0x2Au:
                 result = vs(component) * vt(component);
@@ -310,7 +318,7 @@ bool VU1Interpreter::calculateFmacExactResult(uint32_t component,
                 result = vs(component) - vt(component);
                 break;
             case 0x2Du:
-                result = acc(component) - vs(component) * vt(component);
+                result = acc(component) - product(vs(component), vt(component));
                 break;
             case 0x2Eu:
             {
@@ -318,7 +326,7 @@ bool VU1Interpreter::calculateFmacExactResult(uint32_t component,
                 static constexpr uint8_t right[4] = {2u, 0u, 1u, 3u};
                 result = component == 3u
                              ? 0.0L
-                             : acc(component) - vs(left[component]) * vt(right[component]);
+                             : acc(component) - product(vs(left[component]), vt(right[component]));
                 break;
             }
             default:
@@ -333,9 +341,9 @@ bool VU1Interpreter::calculateFmacExactResult(uint32_t component,
     else if (special <= 0x07u)
         result = vs(component) - vt(special & 3u);
     else if (special <= 0x0Bu)
-        result = acc(component) + vs(component) * vt(special & 3u);
+        result = acc(component) + product(vs(component), vt(special & 3u));
     else if (special <= 0x0Fu)
-        result = acc(component) - vs(component) * vt(special & 3u);
+        result = acc(component) - product(vs(component), vt(special & 3u));
     else if (special >= 0x18u && special <= 0x1Bu)
         result = vs(component) * vt(special & 3u);
     else
@@ -352,31 +360,31 @@ bool VU1Interpreter::calculateFmacExactResult(uint32_t component,
             result = vs(component) + q;
             break;
         case 0x21u:
-            result = acc(component) + vs(component) * q;
+            result = acc(component) + product(vs(component), q);
             break;
         case 0x22u:
             result = vs(component) + i;
             break;
         case 0x23u:
-            result = acc(component) + vs(component) * i;
+            result = acc(component) + product(vs(component), i);
             break;
         case 0x24u:
             result = vs(component) - q;
             break;
         case 0x25u:
-            result = acc(component) - vs(component) * q;
+            result = acc(component) - product(vs(component), q);
             break;
         case 0x26u:
             result = vs(component) - i;
             break;
         case 0x27u:
-            result = acc(component) - vs(component) * i;
+            result = acc(component) - product(vs(component), i);
             break;
         case 0x28u:
             result = vs(component) + vt(component);
             break;
         case 0x29u:
-            result = acc(component) + vs(component) * vt(component);
+            result = acc(component) + product(vs(component), vt(component));
             break;
         case 0x2Au:
             result = vs(component) * vt(component);
@@ -385,7 +393,7 @@ bool VU1Interpreter::calculateFmacExactResult(uint32_t component,
             result = vs(component) - vt(component);
             break;
         case 0x2Du:
-            result = acc(component) - vs(component) * vt(component);
+            result = acc(component) - product(vs(component), vt(component));
             break;
         case 0x2Eu:
         {
