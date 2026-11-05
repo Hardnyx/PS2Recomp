@@ -710,6 +710,25 @@ void PS2Memory::processVIF1Data(const uint8_t *data, uint32_t sizeBytes)
                         handledFormat = false;
                     }
 
+                    // TEKKEN_VIF1_VECTOR_TAIL_V1: match the reference V2/V3 lane expansion.
+                    if (decoded && vl < 3u)
+                    {
+                        if (vn == 1u)
+                        {
+                            decompressed[2] = decompressed[0];
+                            decompressed[3] = decompressed[1];
+                        }
+                        else if (vn == 2u)
+                        {
+                            const uint32_t elementBytes = 4u >> vl;
+                            const uint32_t extraOffset = static_cast<uint32_t>(srcVec - data) + 3u * elementBytes;
+                            uint32_t raw = 0u;
+                            if (extraOffset <= sizeBytes && elementBytes <= sizeBytes - extraOffset)
+                                std::memcpy(&raw, data + extraOffset, elementBytes);
+                            decompressed[3] = (vl == 0u) ? raw : ((vl == 1u) ? extend16(static_cast<uint16_t>(raw)) : extend8(static_cast<uint8_t>(raw)));
+                        }
+                    }
+
                     // Unknown compressed format fallback: preserve legacy raw-copy behavior.
                     if (!handledFormat && decoded && !maskEnable && (vif1_regs.mode == 0u || vif1_regs.mode == 3u))
                     {
