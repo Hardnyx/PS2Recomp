@@ -753,6 +753,41 @@ void register_ps2_runtime_expansion_tests()
             runtime.requestStop();
         });
 
+        tc.Run("MPEG input end stays local to its decoder and drains queued pictures", [](TestCase &t)
+        {
+            constexpr uint32_t firstHandle = 0x00123000u;
+            constexpr uint32_t secondHandle = 0x00124000u;
+            constexpr uint32_t workAddr = 0x00130000u;
+            ps2_stubs::resetMpegStubState();
+
+            R5900Context endCtx{};
+            setRegU32(endCtx, 4, firstHandle);
+            ps2_stubs::sceMpegIsEnd(nullptr, &endCtx, nullptr);
+            t.Equals(getRegS32(endCtx, 2), 0, "a new decoder has no input end");
+
+            ps2_stubs::notifyMpegInputEnd(firstHandle, nullptr);
+            ps2_stubs::sceMpegIsEnd(nullptr, &endCtx, nullptr);
+            t.Equals(getRegS32(endCtx, 2), 1, "explicit input end completes an empty decoder");
+
+            std::vector<uint8_t> rdram(PS2_RAM_SIZE, 0u);
+            R5900Context createCtx{};
+            setRegU32(createCtx, 4, firstHandle);
+            setRegU32(createCtx, 5, workAddr);
+            setRegU32(createCtx, 6, 0x2000u);
+            ps2_stubs::sceMpegCreate(rdram.data(), &createCtx, nullptr);
+            ps2_stubs::sceMpegIsEnd(nullptr, &endCtx, nullptr);
+            t.Equals(getRegS32(endCtx, 2), 0, "creating a decoder clears its old input end");
+
+            ps2_stubs::enqueueMpegDecodedFrameForTesting(secondHandle);
+            ps2_stubs::notifyMpegInputEnd(secondHandle, nullptr);
+            setRegU32(endCtx, 4, secondHandle);
+            ps2_stubs::sceMpegIsEnd(nullptr, &endCtx, nullptr);
+            t.Equals(getRegS32(endCtx, 2), 0, "input end waits for queued pictures");
+            setRegU32(endCtx, 4, firstHandle);
+            ps2_stubs::sceMpegIsEnd(nullptr, &endCtx, nullptr);
+            t.Equals(getRegS32(endCtx, 2), 0, "input end does not affect a second decoder");
+        });
+
         tc.Run("sceMpegGetPicture blocks as a typed scheduler wait and resumes on EOF", [](TestCase &t)
         {
             PS2Runtime runtime;

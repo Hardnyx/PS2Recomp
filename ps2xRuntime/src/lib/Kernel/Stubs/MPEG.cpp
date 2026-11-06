@@ -494,6 +494,7 @@ namespace ps2_stubs
             bool sawInput = false;
             bool sawSequenceEnd = false;
             bool streamEnded = false;
+            bool inputEnded = false;
             bool decoderFailed = false;
             uint64_t cdStreamGeneration = 0u;
             bool waitingForVideoSequenceHeader = true;
@@ -1849,6 +1850,24 @@ namespace ps2_stubs
         }
     }
 
+    void notifyMpegInputEnd(uint32_t mpegAddr, PS2Runtime *runtime)
+    {
+        {
+            std::lock_guard<std::mutex> lock(g_mpeg_stub_mutex);
+            const auto it = g_mpeg_stub_state.playbackByMpeg.find(mpegAddr);
+            if (it == g_mpeg_stub_state.playbackByMpeg.end() || it->second.inputEnded)
+                return;
+
+            MpegPlaybackState &playback = it->second;
+            if (!playback.streamEnded)
+                finishPlaybackStream(mpegAddr, playback);
+            playback.inputEnded = true;
+        }
+
+        if (runtime)
+            runtime->eeScheduler().completeExternalWait(kMpegPictureWaitType, mpegAddr, KE_OK);
+    }
+
     void sceMpegFlush(uint8_t *rdram, R5900Context *ctx, PS2Runtime *runtime)
     {
         (void)rdram;
@@ -2455,14 +2474,14 @@ namespace ps2_stubs
         std::lock_guard<std::mutex> lock(g_mpeg_stub_mutex);
         g_mpeg_stub_state.initialized = true;
         MpegPlaybackState &playback = getPlaybackState(mpegAddr);
-        // Only the producer/demux EOF is authoritative. A sequence_end_code can
+        // An explicit producer EOF is authoritative. A sequence_end_code can
         // be observed while more PSS data is still buffered, and a decoder
         // failure before producer EOF may still recover on a later sequence.
         const bool producerEnded =
             g_mpeg_stub_state.currentCdStreamEofSeen &&
             playback.cdStreamGeneration == g_mpeg_stub_state.cdStreamGeneration;
-        const bool ended = producerEnded &&
-                           (playback.streamEnded || (playback.decoderFailed && playback.sawInput));
+        const bool ended = playback.inputEnded || (producerEnded &&
+                            (playback.streamEnded || (playback.decoderFailed && playback.sawInput)));
         const uint64_t presentationEnd = playback.presentationEndTickQ32;
         const uint64_t currentTickQ32 = runtime != nullptr
                                             ? (runtime->eeScheduler().currentVSyncTick() << 32u)
