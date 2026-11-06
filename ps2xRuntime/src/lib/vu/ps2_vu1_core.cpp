@@ -5,6 +5,7 @@
 #include "ps2_vu1_detail.h"
 
 #include <algorithm>
+#include <bit>
 #include <cfenv>
 #include <cmath>
 #include <cstdio>
@@ -16,6 +17,8 @@
 
 namespace
 {
+    constexpr uint32_t kNonzeroViMask = 0xFFFEu;
+
     constexpr uint8_t laneForComponent(uint32_t component)
     {
         return static_cast<uint8_t>(1u << (3u - component));
@@ -1017,11 +1020,8 @@ uint64_t VU1Interpreter::calculatePairReadyCycle(const DecodedInstructionPair &d
                     ready = std::max(ready, m_vfReady[access.reg][component]);
             }
         }
-        for (uint32_t reg = 1; reg < m_viReady.size(); ++reg)
-        {
-            if ((usage->viRead & (1u << reg)) != 0u)
-                ready = std::max(ready, m_viReady[reg]);
-        }
+        for (uint32_t reads = usage->viRead & kNonzeroViMask; reads != 0u; reads &= reads - 1u)
+            ready = std::max(ready, m_viReady[std::countr_zero(reads)]);
         for (uint32_t component = 0; component < 4u; ++component)
         {
             if ((usage->accRead & laneForComponent(component)) != 0u)
@@ -1075,11 +1075,11 @@ void VU1Interpreter::markPairWrites(const DecodedInstructionPair &decoded)
         }
     }
 
-    for (uint32_t reg = 1; reg < m_viReady.size(); ++reg)
-    {
-        if ((decoded.lowerUsage.viWrite & (1u << reg)) != 0u)
-            m_viReady[reg] = m_cycle + (decoded.lowerUsage.viLatency != 0u ? decoded.lowerUsage.viLatency : decoded.lowerUsage.latency);
-    }
+    const uint32_t viLatency = decoded.lowerUsage.viLatency != 0u
+                                   ? decoded.lowerUsage.viLatency
+                                   : decoded.lowerUsage.latency;
+    for (uint32_t writes = decoded.lowerUsage.viWrite & kNonzeroViMask; writes != 0u; writes &= writes - 1u)
+        m_viReady[std::countr_zero(writes)] = m_cycle + viLatency;
     for (uint32_t component = 0; component < 4u; ++component)
     {
         if ((decoded.upperUsage.accWrite & laneForComponent(component)) != 0u)
@@ -1675,17 +1675,11 @@ void VU1Interpreter::run(uint8_t *vuCode, uint32_t codeSize,
         if (m_cycle >= budgetEnd)
             break;
 
-        uint8_t writtenVi = 0u;
-        int32_t oldVi = 0;
-        for (uint32_t reg = 1; reg < 16u; ++reg)
-        {
-            if ((decoded.lowerUsage.viWrite & (1u << reg)) != 0u)
-            {
-                writtenVi = static_cast<uint8_t>(reg);
-                oldVi = m_state.vi[reg];
-                break;
-            }
-        }
+        const uint32_t viWrites = decoded.lowerUsage.viWrite & kNonzeroViMask;
+        const uint8_t writtenVi = viWrites != 0u
+                                      ? static_cast<uint8_t>(std::countr_zero(viWrites))
+                                      : 0u;
+        const int32_t oldVi = writtenVi != 0u ? m_state.vi[writtenVi] : 0;
 
         const VfAccess upperWrite = decoded.upperUsage.vfWrite;
         const VfAccess lowerWrite = decoded.lowerUsage.vfWrite;
