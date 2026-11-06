@@ -135,6 +135,19 @@ To execute the recompiled code.
 
 See [IOP emulation](ps2xIOP/README.md) for module execution and the service boundary.
 
+#### Optional VU1 reference interpreter
+
+Set `PS2X_ENABLE_KZVU_VU1=ON` at configuration time and provide
+`PS2X_KZVU_SOURCE_DIR` and the adapter's pinned `KZVU_PCSX2_DIR`. A
+source-built `kzvu` target already present in the build can also supply
+the adapter. Set the process environment variable `PS2X_VU1_BACKEND=kzvu`
+to select the optional reference interpreter at game-thread startup.
+The built-in VU1 interpreter remains the default.
+
+The optional session owns the process-wide kzvu instance on the game
+thread. The adapter handles VIF1 program starts, MSCNT, VU memory and
+ordered PATH1 packet delivery through the runtime's GIF arbiter.
+
 ### Game Override Hooks
 
 Game overrides are runtime-side, build-scoped patch modules.

@@ -4,6 +4,9 @@
 #include "runtime/gs/ps2_gs_psmct32.h"
 #include "runtime/ps2_memory.h"
 #include "runtime/ps2_vu1.h"
+#if defined(PS2X_TEST_KZVU_VU1)
+#include "vu/ps2_vu1_kzvu.h"
+#endif
 
 #include <cmath>
 #include <cstdint>
@@ -217,6 +220,37 @@ void register_ps2_vu1_tests()
 {
     MiniTest::Case("PS2VU1", [](TestCase &tc)
     {
+#if defined(PS2X_TEST_KZVU_VU1)
+        tc.Run("kzvu MSCNT starts at TPC and retains the prior program state", [](TestCase &t)
+        {
+            Vu1Fixture fx;
+            t.IsTrue(fx.initialize(), "VU1 fixture should initialize");
+            constexpr uint32_t end = kVuUpperNop | 0x40000000u;
+            constexpr uint32_t lowerNop = 0x8000033cu;
+            constexpr uint32_t storeVi1 = (0x05u << 25) | (0x8u << 21) | (1u << 16);
+            writeVuInstructionPair(fx.code, 0u, makeVuIaddiu(1u, 0u, 42), end);
+            writeVuInstructionPair(fx.code, 8u, lowerNop, kVuUpperNop);
+            writeVuInstructionPair(fx.code, 16u, storeVi1, end);
+            writeVuInstructionPair(fx.code, 24u, lowerNop, kVuUpperNop);
+
+            VU1State state{};
+            {
+                PS2Vu1Kzvu session(fx.mem, true);
+                t.IsTrue(PS2Vu1Kzvu::tryExecute(fx.mem, state, 0u, 0u, 0u, 256u),
+                         "The selected backend should execute MSCAL");
+                t.Equals(state.pc, 16u, "TPC should follow the first end delay slot");
+
+                t.IsTrue(PS2Vu1Kzvu::tryExecute(fx.mem, state, std::nullopt, 0u, 0u, 256u),
+                         "The selected backend should execute MSCNT");
+                t.Equals(state.pc, 32u, "MSCNT should reach the second end delay slot");
+                uint32_t value = 0;
+                std::memcpy(&value, fx.data, sizeof value);
+                t.Equals(value, 42u, "The second program should see the first program's VI state");
+            }
+            t.IsTrue(!PS2Vu1Kzvu::tryExecute(fx.mem, state, 0u, 0u, 0u, 256u),
+                     "The session should release the VU1 backend");
+        });
+#endif
         tc.Run("upper ADD applies the destination mask", [](TestCase &t)
         {
             Vu1Fixture fx;

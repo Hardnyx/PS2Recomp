@@ -55,6 +55,10 @@ target_link_libraries(ps2_test_lib PRIVATE
     ps2_iop
 )
 
+if(PS2X_ENABLE_KZVU_VU1)
+    target_compile_definitions(ps2_test_lib PRIVATE PS2X_TEST_KZVU_VU1=1)
+endif()
+
 if(UNIX AND NOT APPLE)
     target_link_libraries(ps2_test_lib PRIVATE ${CMAKE_DL_LIBS})
 endif()

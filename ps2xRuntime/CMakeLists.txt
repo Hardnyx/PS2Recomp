@@ -515,6 +515,24 @@ if(PS2X_KZSPU2_SOURCE_DIR)
     target_link_libraries(ps2_runtime PRIVATE kzspu2)
     set_property(SOURCE src/lib/ps2_runtime.cpp APPEND PROPERTY COMPILE_DEFINITIONS PS2X_KZSPU2=1)
 endif()
+option(PS2X_ENABLE_KZVU_VU1 "Build the optional kzvu VU1 interpreter" OFF)
+set(PS2X_KZVU_SOURCE_DIR "" CACHE PATH "Source directory for the optional kzvu VU1 interpreter")
+if(PS2X_ENABLE_KZVU_VU1)
+    if(NOT TARGET kzvu)
+        if(NOT PS2X_KZVU_SOURCE_DIR)
+            message(FATAL_ERROR "PS2X_ENABLE_KZVU_VU1 requires PS2X_KZVU_SOURCE_DIR or an existing kzvu target")
+        endif()
+        add_subdirectory("${PS2X_KZVU_SOURCE_DIR}" "${CMAKE_BINARY_DIR}/ps2x-kzvu")
+    endif()
+    if(TARGET kzvu_flags)
+        # kzvu ships a private fmt that can share an inline namespace with the host fmt.
+        target_compile_definitions(kzvu_flags INTERFACE fmt=ps2x_kzvu_fmt)
+    endif()
+    target_sources(ps2_runtime PRIVATE src/lib/vu/ps2_vu1_kzvu.cpp)
+    target_link_libraries(ps2_runtime PRIVATE kzvu)
+    set_property(SOURCE src/lib/ps2_runtime.cpp APPEND PROPERTY COMPILE_DEFINITIONS PS2X_KZVU_VU1=1)
+endif()
+
 target_link_libraries(ps2EntryRunner
     PRIVATE
     ps2_runtime
