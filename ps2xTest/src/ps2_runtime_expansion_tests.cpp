@@ -721,6 +721,7 @@ void register_ps2_runtime_expansion_tests()
                      "new CD stream demux should allow callbacks on a reused MPEG handle");
 
             constexpr uint32_t kMpegWorkAddr = 0x00130000u;
+            std::memset(rdram.data() + kMpegWorkAddr, 0x5F, 12u);
             R5900Context createCtx{};
             setRegU32(createCtx, 4, kMpegAddr);
             setRegU32(createCtx, 5, kMpegWorkAddr);
@@ -728,6 +729,12 @@ void register_ps2_runtime_expansion_tests()
             ps2_stubs::sceMpegCreate(rdram.data(), &createCtx, &runtime);
             t.IsTrue(::getRegU32(&createCtx, 2) != 0u,
                      "sceMpegCreate should reopen the MPEG handle after an ended reset");
+
+            uint32_t decoderStatus[3]{};
+            std::memcpy(decoderStatus, rdram.data() + kMpegWorkAddr, sizeof(decoderStatus));
+            t.Equals(decoderStatus[0], 0u, "sceMpegCreate should clear the end flag in reused work memory");
+            t.Equals(decoderStatus[1], 0u, "sceMpegCreate should clear the reference count");
+            t.Equals(decoderStatus[2], 0u, "sceMpegCreate should clear the decoder state");
 
             gMpegStreamCallbackCount.store(0u, std::memory_order_release);
             prepareCallbackDispatch();
