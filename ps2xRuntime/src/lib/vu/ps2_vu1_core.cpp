@@ -1645,9 +1645,12 @@ void VU1Interpreter::run(uint8_t *vuCode, uint32_t codeSize,
     const bool useVuRounding = std::fesetround(FE_TOWARDZERO) == 0;
     const uint64_t budgetEnd = m_cycle + maxCycles;
     bool programEnded = false;
+    // Synchronize the entry cycle before executing or resuming. Each later
+    // iteration begins after advanceOneCycle has committed its writes.
+    if (m_cycle < budgetEnd && !m_stopRequested)
+        commitReadyPipelines();
     while (m_cycle < budgetEnd && !m_stopRequested)
     {
-        commitReadyPipelines();
         if (m_state.pc + 8u > codeSize)
             break;
 

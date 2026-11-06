@@ -10,6 +10,7 @@ The upstream license and notices are retained in [LICENSE](LICENSE).
 - Saturate FMAC products before accumulation and retain sticky overflow.
 - Expand VIF1 V2 and V3 UNPACK lanes before applying row and mask state.
 - Open the Runtime Debugger as a collapsed top bar on first use.
+- Commit VU pipeline writes once per cycle after the entry scan.
 
 The source patches and synthetic regressions are maintained in
 [TekkenTagPort](https://github.com/Hardnyx/TekkenTagPort/tree/abc3e67bb2155ccd6937c77f75d1602a569e8ec9).
