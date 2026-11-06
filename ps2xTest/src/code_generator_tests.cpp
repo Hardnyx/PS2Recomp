@@ -205,6 +205,27 @@ void register_code_generator_tests()
                  "LWU must not sign-extend bit 31 into the allocator bitmap value");
     });
 
+    tc.Run("EE quadword access aligns the complete effective address", [](TestCase &t) {
+        CodeGenerator gen({}, {});
+        const Instruction lq = makeIType(0x8F20, OPCODE_LQ, 1, 2, 0xFFF8);
+        const Instruction sq = makeIType(0x8F24, OPCODE_SQ, 29, 2, 8);
+        const MemoryAccessHint ram{true, 0x1234u};
+        const MemoryAccessHint scratchpad{true, 0x7000000Cu};
+
+        t.IsTrue(gen.translateInstruction(lq).find("READ128((ADD32(GPR_U32(ctx, 1), 4294967288) & ~0xFu))") != std::string::npos,
+                 "LQ must align after adding the signed displacement to the base");
+        t.IsTrue(gen.translateInstruction(sq).find("WRITE128((ADD32(GPR_U32(ctx, 29), 8) & ~0xFu),") != std::string::npos,
+                 "SQ must not write across the adjacent quadword");
+        t.IsTrue(gen.translateInstruction(lq, ram).find("FAST_READ128(0x1230u)") != std::string::npos,
+                 "resolved RAM LQ must use the aligned address");
+        t.IsTrue(gen.translateInstruction(sq, ram).find("FAST_WRITE128(0x1230u,") != std::string::npos,
+                 "resolved RAM SQ must use the aligned address");
+        t.IsTrue(gen.translateInstruction(lq, scratchpad).find("Load128(rdram, ctx, 0x70000000u)") != std::string::npos,
+                 "resolved scratchpad LQ must use the aligned address");
+        t.IsTrue(gen.translateInstruction(sq, scratchpad).find("Store128(rdram, ctx, 0x70000000u,") != std::string::npos,
+                 "resolved scratchpad SQ must use the aligned address");
+    });
+
     tc.Run("SYSCALL publishes its continuation before entering the runtime", [](TestCase &t) {
         Function func;
         func.name = "syscall_resume";

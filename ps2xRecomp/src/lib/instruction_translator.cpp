@@ -69,8 +69,13 @@ namespace ps2recomp
 
     MemoryAccessHint InstructionTranslator::effectiveMemoryHintFor(const Instruction &inst, const MemoryAccessHint &memoryHint) const
     {
-        // TODO disable for now since it causing issues with some games.
-        return memoryHint;
+        MemoryAccessHint effectiveHint = memoryHint;
+        if (inst.opcode == OPCODE_LQ || inst.opcode == OPCODE_SQ)
+        {
+            // EE quadword loads and stores ignore the low four address bits.
+            effectiveHint.address &= ~0xFu;
+        }
+        return effectiveHint;
     }
 
     std::string InstructionTranslator::translateMemoryRead(const Instruction &inst,
@@ -196,9 +201,9 @@ namespace ps2recomp
         case OPCODE_SW:
             return genWrite(32, fmt::format("ADD32(GPR_U32(ctx, {}), {})", inst.rs, inst.simmediate), fmt::format("GPR_U32(ctx, {})", inst.rt)) + ";";
         case OPCODE_LQ:
-            return fmt::format("SET_GPR_VEC(ctx, {}, {});", inst.rt, genRead(128, fmt::format("ADD32(GPR_U32(ctx, {}), {})", inst.rs, inst.simmediate)));
+            return fmt::format("SET_GPR_VEC(ctx, {}, {});", inst.rt, genRead(128, fmt::format("(ADD32(GPR_U32(ctx, {}), {}) & ~0xFu)", inst.rs, inst.simmediate)));
         case OPCODE_SQ:
-            return genWrite(128, fmt::format("ADD32(GPR_U32(ctx, {}), {})", inst.rs, inst.simmediate), fmt::format("GPR_VEC(ctx, {})", inst.rt)) + ";";
+            return genWrite(128, fmt::format("(ADD32(GPR_U32(ctx, {}), {}) & ~0xFu)", inst.rs, inst.simmediate), fmt::format("GPR_VEC(ctx, {})", inst.rt)) + ";";
         case OPCODE_LD:
             return fmt::format("SET_GPR_U64(ctx, {}, {});", inst.rt, genRead(64, fmt::format("ADD32(GPR_U32(ctx, {}), {})", inst.rs, inst.simmediate)));
         case OPCODE_SD:
