@@ -2218,6 +2218,9 @@ void PS2DebugPanel::draw(PS2Runtime &runtime)
 
     rlImGuiBegin();
 
+    const ImVec2 origin = ImGui::GetMainViewport()->WorkPos;
+    ImGui::SetNextWindowPos(ImVec2(origin.x + 166.0f, origin.y), ImGuiCond_FirstUseEver);
+    ImGui::SetNextWindowCollapsed(true, ImGuiCond_FirstUseEver);
     ImGui::SetNextWindowSize(ImVec2(780.0f, 620.0f), ImGuiCond_FirstUseEver);
     if (ImGui::Begin("Runtime Debugger", &m_visible, ImGuiWindowFlags_MenuBar))
     {
