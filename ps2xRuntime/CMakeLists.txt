@@ -507,6 +507,14 @@ target_include_directories(ps2_runtime PUBLIC
 )
 
 target_link_libraries(ps2_runtime PUBLIC ps2_host_backend ffmpeg ps2_iop)
+
+set(PS2X_KZSPU2_SOURCE_DIR "" CACHE PATH "Optional kzspu2 source directory")
+if(PS2X_KZSPU2_SOURCE_DIR)
+    add_subdirectory("${PS2X_KZSPU2_SOURCE_DIR}" "${CMAKE_BINARY_DIR}/ps2x-kzspu2")
+    target_sources(ps2_runtime PRIVATE src/lib/ps2_spu2_audio.cpp)
+    target_link_libraries(ps2_runtime PRIVATE kzspu2)
+    set_property(SOURCE src/lib/ps2_runtime.cpp APPEND PROPERTY COMPILE_DEFINITIONS PS2X_KZSPU2=1)
+endif()
 target_link_libraries(ps2EntryRunner
     PRIVATE
     ps2_runtime

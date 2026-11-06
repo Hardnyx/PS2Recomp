@@ -1,5 +1,6 @@
 #include "ps2_runtime.h"
 #include "games_database.h"
+#include "ps2_host_backend.h"
 #if defined(PS2X_ENABLE_DEBUG_UI) && !defined(PLATFORM_VITA)
 #include "ps2_debug_panel.h"
 #endif
@@ -140,12 +141,12 @@ namespace
         return result;
     }
 
-    std::filesystem::path getExecutablePath(int argc, char *argv[])
+    std::filesystem::path getExecutablePath(const char *bootPath)
     {
-        if (argc >= 2 && argv[1] && argv[1][0] != '\0')
+        if (bootPath)
         {
             std::cout << "Using argv boot path" << std::endl;
-            return std::filesystem::path(argv[1]);
+            return std::filesystem::path(bootPath);
         }
 #if defined(PS2X_DEFAULT_BOOT_ELF)
         std::cout << "Using default boot file" << std::endl;
@@ -159,7 +160,7 @@ namespace
         }
         return (std::filesystem::current_path() / configuredPath).lexically_normal();
 #else
-        throw std::runtime_error("Unable to determine executable path. Pass the guest ELF as argv[1] or define PS2X_DEFAULT_BOOT_ELF.");
+        throw std::runtime_error("Unable to determine executable path. Pass the guest ELF path or define PS2X_DEFAULT_BOOT_ELF.");
 #endif
     }
 }
@@ -173,7 +174,17 @@ int main(int argc, char *argv[])
 
     try
     {
-        std::filesystem::path pathObj = getExecutablePath(argc, argv);
+        const char *bootPath = nullptr;
+        bool mute = false;
+        for (int i = 1; i < argc; ++i)
+        {
+            const std::string_view argument = argv[i];
+            if (argument == "--mute")
+                mute = true;
+            else if (!argument.empty() && !bootPath)
+                bootPath = argv[i];
+        }
+        std::filesystem::path pathObj = getExecutablePath(bootPath);
 
         std::string filePathStr = pathObj.string();
         std::string elfName = pathObj.filename().string();
@@ -219,6 +230,14 @@ int main(int argc, char *argv[])
             std::cerr << "Failed to initialize PS2 runtime" << std::endl;
             return 1;
         }
+
+#if !defined(PLATFORM_VITA)
+        if (mute && IsAudioDeviceReady())
+        {
+            SetMasterVolume(0.0f);
+            std::cout << "Audio output muted" << std::endl;
+        }
+#endif
 
         if (!runtime.loadELF(filePathStr))
         {

@@ -1,5 +1,6 @@
 #pragma once
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <optional>
@@ -67,7 +68,26 @@ namespace ps2x::iop::detail
         void setInterruptMask(uint32_t value) noexcept { m_interruptMask = value; }
         void setInterruptControl(uint32_t value) noexcept { m_interruptControl = value & 1u; }
 
+        // TEKKEN_IOP_SPU2_STREAM_V1: guest-driven sound RAM, voice progress and IRQs.
+        void advanceSpu2(uint64_t cycle);
+        [[nodiscard]] uint64_t nextSpu2EventCycle(uint64_t limit) const;
+        [[nodiscard]] bool spu2InterruptPending() const noexcept { return m_spuIrqPending; }
+        void acknowledgeSpu2Interrupt() noexcept { m_spuIrqPending = false; }
         [[nodiscard]] std::optional<DmaStart> takeDmaStart() noexcept;
+
+        // Host SPU2 (ps2x/iop/iop_host_spu2.h): the IOP cycle the hooks see is *epoch + *cycles.
+        void setCycleSource(const uint64_t *cycles, const uint64_t *epoch) noexcept
+        {
+            m_cycles = cycles;
+            m_cycleEpoch = epoch;
+        }
+        [[nodiscard]] uint64_t spu2Cycle() const noexcept
+        {
+            return (m_cycles ? *m_cycles : 0u) + (m_cycleEpoch ? *m_cycleEpoch : 0u);
+        }
+        // DMA ch4 (core 0) / ch7 (core 1) finished: clears CHCR.TR and moves MADR to the end of the transfer.
+        // Returns false if the guest had already stopped the channel (no interrupt then).
+        [[nodiscard]] bool completeSpu2Dma(int core);
         [[nodiscard]] std::span<const uint8_t> ram() const noexcept { return m_ram; }
 
         [[nodiscard]] static uint32_t physicalAddress(uint32_t address) noexcept;
@@ -76,7 +96,27 @@ namespace ps2x::iop::detail
         [[nodiscard]] uint32_t readHardware32(uint32_t address) const;
         void writeHardware32(uint32_t address, uint32_t value);
         void markOwned(uint32_t address, size_t size);
+        [[nodiscard]] static bool isSpu2Register(uint32_t phys) noexcept;
+        void startSpu2Dma(uint32_t chcrAddress, uint32_t chcr);
 
+        struct SpuVoice
+        {
+            uint32_t wordAddress = 0u;
+            uint32_t samplePhase = 0u;
+            uint8_t flags = 0u;
+            bool active = false;
+            bool fetch = true;
+        };
+        void checkSpu2Irq(uint32_t wordAddress);
+        void transferSpu2Dma(uint32_t address, uint32_t value, uint64_t words);
+        void writeSpu2Control(uint32_t address, uint32_t value);
+        [[nodiscard]] uint32_t spu2Address(uint32_t registerAddress) const;
+        void setSpu2Address(uint32_t registerAddress, uint32_t wordAddress);
+        std::vector<uint8_t> m_spuRam;
+        std::array<std::array<SpuVoice, 24>, 2> m_spuVoices{};
+        std::array<uint32_t, 2> m_spuActiveMasks{};
+        uint64_t m_spuCycle = 0u;
+        bool m_spuIrqPending = false;
         std::vector<uint8_t> m_ram;
         std::vector<uint8_t> m_owned;
         std::vector<uint8_t> m_scratch;
@@ -87,5 +127,12 @@ namespace ps2x::iop::detail
         uint32_t m_interruptMask = 0;
         uint32_t m_interruptControl = 1;
         std::optional<DmaStart> m_dmaStart;
+        const uint64_t *m_cycles = nullptr;
+        const uint64_t *m_cycleEpoch = nullptr;
+        uint32_t m_spu2DmaEnd[2] = {};
     };
+
+    // Host SPU2 interrupt requests queued by iopSpu2RaiseIrq / iopSpu2DmaComplete: bit 0 = SPU2 IRQ (line 9),
+    // bit 1 = DMA ch4 end, bit 2 = DMA ch7 end. Taken (and cleared) by the emulator.
+    [[nodiscard]] uint32_t takeSpu2Pending() noexcept;
 }

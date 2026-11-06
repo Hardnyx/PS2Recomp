@@ -1,4 +1,6 @@
 #include "iop_timrman.h"
+// TEKKEN_IOP_TIMER_IRQ_V1
+#include "iop_intrman.h"
 
 #include "../core/iop_cpu.h"
 #include "../services/iop_rpc.h"
@@ -11,6 +13,15 @@ namespace ps2x::iop::detail
 {
     namespace
     {
+        constexpr uint32_t kResetOnTarget = 0x0008u;
+        constexpr uint32_t kInterruptOnTarget = 0x0010u;
+        constexpr uint32_t kInterruptOnOverflow = 0x0020u;
+        constexpr uint32_t kInterruptRepeat = 0x0040u;
+        constexpr uint32_t kInterruptToggle = 0x0080u;
+        constexpr uint32_t kInterruptArmed = 0x0400u;
+        constexpr uint32_t kTargetStatus = 0x0800u;
+        constexpr uint32_t kOverflowStatus = 0x1000u;
+        constexpr uint32_t kStatusMask = 0x1C00u;
         constexpr int32_t kNoTimer = -150;
         constexpr int32_t kIllegalTimerId = -151;
         constexpr int32_t kIllegalSource = -152;
@@ -123,24 +134,15 @@ namespace ps2x::iop::detail
         timer.counterBase = static_cast<uint32_t>(current);
         timer.counterBaseCycle = currentCycle;
 
-        if (timer.compareCallback.function != 0u)
-        {
-            const uint64_t modulus = timer.width == 16u ? (1ull << 16u) : (1ull << 32u);
-            const uint64_t compare = timer.width == 16u ? (timer.compare & 0xFFFFu) : timer.compare;
-            uint64_t delta = (compare + modulus - current) % modulus;
-            if (delta == 0u)
-                delta = modulus;
-            timer.compareCycle = currentCycle + ticksToCycles(timer, delta);
-        }
-
-        if (timer.overflowCallback.function != 0u)
-        {
-            const uint64_t modulus = timer.width == 16u ? (1ull << 16u) : (1ull << 32u);
-            uint64_t delta = modulus - current;
-            if (delta == 0u)
-                delta = modulus;
-            timer.overflowCycle = currentCycle + ticksToCycles(timer, delta);
-        }
+        // Legacy clients install an intrman handler instead of SetTimerHandler.
+        // Counter events and their status flags also exist without a callback.
+        const uint64_t modulus = timer.width == 16u ? (1ull << 16u) : (1ull << 32u);
+        const uint64_t compare = timer.width == 16u ? (timer.compare & 0xFFFFu) : timer.compare;
+        uint64_t delta = (compare + modulus - current) % modulus;
+        if (delta == 0u)
+            delta = modulus;
+        timer.compareCycle = currentCycle + ticksToCycles(timer, delta);
+        timer.overflowCycle = currentCycle + ticksToCycles(timer, modulus - current);
     }
 
     void IopTimrman::stop(Timer &timer, uint64_t currentCycle) noexcept
@@ -149,6 +151,7 @@ namespace ps2x::iop::detail
         timer.counterBaseCycle = currentCycle;
         timer.running = false;
         timer.liveMode = 0u;
+        timer.interruptPending = false;
         timer.compareCycle = UINT64_MAX;
         timer.overflowCycle = UINT64_MAX;
     }
@@ -233,14 +236,29 @@ namespace ps2x::iop::detail
             {
                 timer->liveMode = a1;
                 timer->running = true;
+                timer->counterBase = 0u;
                 timer->counterBaseCycle = currentCycle;
+                timer->interruptArmed = true;
+                timer->interruptPending = false;
                 schedule(*timer, currentCycle);
             }
             setV0(0u);
             return true;
         }
-        case 8: // GetTimerStatus
-        case 17: // GetTimerMode
+        case 8: // GetTimerStatus: hardware target/overflow flags clear on read.
+        {
+            Timer *timer = timerFromId(a0);
+            if (!timer)
+                setV0(errorValue(kIllegalTimerId));
+            else
+            {
+                setV0((timer->liveMode & ~kStatusMask) | timer->statusFlags |
+                      (timer->interruptArmed ? kInterruptArmed : 0u));
+                timer->statusFlags = 0u;
+            }
+            return true;
+        }
+        case 17: // GetTimerMode: saved configuration, without hardware status.
         {
             const Timer *timer = timerFromId(a0);
             setV0(timer ? timer->liveMode : errorValue(kIllegalTimerId));
@@ -388,6 +406,8 @@ namespace ps2x::iop::detail
             timer->counterBaseCycle = currentCycle;
             timer->liveMode = 0x80000000u | timer->setupMode;
             timer->running = true;
+            timer->interruptArmed = true;
+            timer->interruptPending = false;
             schedule(*timer, currentCycle);
             setV0(0u);
             return true;
@@ -414,7 +434,7 @@ namespace ps2x::iop::detail
         }
     }
 
-    void IopTimrman::serviceDue(uint64_t currentCycle, IopGuestExecutor &executor)
+    void IopTimrman::serviceDue(uint64_t currentCycle, IopGuestExecutor &executor, IopIntrman *intrman)
     {
         if (m_servicing)
             return;
@@ -431,34 +451,72 @@ namespace ps2x::iop::detail
                 continue;
 
             const bool compareDue = timer.compareCycle <= currentCycle;
-            const bool overflowDue = timer.overflowCycle <= currentCycle;
-            if (!compareDue && !overflowDue)
-                continue;
-
-            const Callback callback = compareDue ? timer.compareCallback : timer.overflowCallback;
-            timer.compareCycle = UINT64_MAX;
-            timer.overflowCycle = UINT64_MAX;
-            const uint32_t result = callback.function != 0u
-                                        ? executor.executeGuestFunctionWithBudget(callback.function,
-                                                                                  callback.common,
-                                                                                  0u,
-                                                                                  0u,
-                                                                                  0u,
-                                                                                  callback.gp,
-                                                                                  100000u)
-                                        : 0u;
-            if (!timer.running)
-                continue;
-            if (result == 0u)
+            const bool resetOnTarget = compareDue && (timer.liveMode & kResetOnTarget) != 0u;
+            // A target reset before wrap prevents an otherwise overdue overflow.
+            const bool overflowDue = timer.overflowCycle <= currentCycle &&
+                                     (!resetOnTarget || timer.overflowCycle < timer.compareCycle);
+            if (compareDue || overflowDue)
             {
-                stop(timer, currentCycle);
-                continue;
+                if (compareDue)
+                    timer.statusFlags |= kTargetStatus;
+                if (overflowDue)
+                    timer.statusFlags |= kOverflowStatus;
+
+                const bool compareCallbackDue = compareDue && timer.compareCallback.function != 0u;
+                const Callback callback = compareCallbackDue
+                                              ? timer.compareCallback
+                                              : (overflowDue ? timer.overflowCallback : Callback{});
+                if (callback.function != 0u)
+                {
+                    // Preserve the newer callback API: its return is the next target,
+                    // while zero stops the timer, rather than following intrman IRQs.
+                    const uint32_t result = executor.executeGuestFunctionWithBudget(callback.function,
+                                                                                    callback.common,
+                                                                                    0u,
+                                                                                    0u,
+                                                                                    0u,
+                                                                                    callback.gp,
+                                                                                    100000u);
+                    if (!timer.running)
+                        continue;
+                    if (result == 0u)
+                        stop(timer, currentCycle);
+                    else
+                    {
+                        if (compareCallbackDue)
+                            timer.compare = timer.width == 16u ? (result & 0xFFFFu) : result;
+                        timer.counterBase = 0u;
+                        timer.counterBaseCycle = currentCycle;
+                        schedule(timer, currentCycle);
+                    }
+                    continue;
+                }
+
+                const bool interruptEvent = (compareDue && (timer.liveMode & kInterruptOnTarget) != 0u) ||
+                                            (overflowDue && (timer.liveMode & kInterruptOnOverflow) != 0u);
+                if (interruptEvent)
+                {
+                    if (timer.interruptArmed)
+                        timer.interruptPending = true;
+                    if ((timer.liveMode & kInterruptRepeat) == 0u)
+                        timer.interruptArmed = false;
+                    else if ((timer.liveMode & kInterruptToggle) != 0u)
+                        timer.interruptArmed = !timer.interruptArmed;
+                }
+
+                if (resetOnTarget)
+                {
+                    const uint64_t modulus = timer.width == 16u ? (1ull << 16u) : (1ull << 32u);
+                    const uint64_t period = timer.compare != 0u ? timer.compare : modulus;
+                    timer.counterBase = static_cast<uint32_t>(counterValue(timer, currentCycle) % period);
+                    timer.counterBaseCycle = currentCycle;
+                }
+                schedule(timer, currentCycle);
             }
-            if (compareDue)
-                timer.compare = timer.width == 16u ? (result & 0xFFFFu) : result;
-            timer.counterBase = 0u;
-            timer.counterBaseCycle = currentCycle;
-            schedule(timer, currentCycle);
+
+            // A masked interrupt remains pending and can be delivered after EnableIntr.
+            if (timer.interruptPending && intrman && intrman->dispatchInterrupt(timer.irq, executor))
+                timer.interruptPending = false;
         }
 
     }

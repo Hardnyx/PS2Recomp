@@ -1,4 +1,5 @@
 #pragma once
+// TEKKEN_IOP_TIMER_IRQ_V1
 
 #include <array>
 #include <cstddef>
@@ -8,6 +9,7 @@ namespace ps2x::iop::detail
 {
     struct IopCpuState;
     class IopGuestExecutor;
+    class IopIntrman;
 
     class IopTimrman
     {
@@ -15,7 +17,7 @@ namespace ps2x::iop::detail
         void reset() noexcept;
 
         [[nodiscard]] bool dispatchImport(uint16_t ordinal, IopCpuState &cpu, uint64_t currentCycle);
-        void serviceDue(uint64_t currentCycle, IopGuestExecutor &executor);
+        void serviceDue(uint64_t currentCycle, IopGuestExecutor &executor, IopIntrman *intrman = nullptr);
         [[nodiscard]] uint64_t nextEventCycle(uint64_t fallback) const noexcept;
 
     private:
@@ -39,6 +41,7 @@ namespace ps2x::iop::detail
             uint32_t prescale = 1u;
             uint32_t setupMode = 0u;
             uint32_t liveMode = 0u;
+            uint32_t statusFlags = 0u;
             uint32_t counterBase = 0u;
             uint32_t compare = 0u;
             uint64_t counterBaseCycle = 0u;
@@ -46,6 +49,8 @@ namespace ps2x::iop::detail
             uint64_t overflowCycle = UINT64_MAX;
             bool configured = false;
             bool running = false;
+            bool interruptArmed = true;
+            bool interruptPending = false;
 
             Callback compareCallback;
             Callback overflowCallback;

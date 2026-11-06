@@ -11,6 +11,9 @@
 #include "Kernel/Stubs/GS.h"
 #include "Kernel/Stubs/MPEG.h"
 #include "ps2_host_backend.h"
+#if defined(PS2X_KZSPU2)
+#include "ps2_spu2_audio.h"
+#endif
 #include "ps2_iop_host.h"
 #include "ps2x/iop/iop_subsystem.h"
 
@@ -2345,6 +2348,11 @@ void PS2Runtime::run()
     ps2_stubs::resetSifState();
     resetIop();
     ps2_stubs::resetAudioStubState();
+#if defined(PS2X_KZSPU2)
+    PS2Spu2Audio spu2Audio;
+    if (spu2Audio.active())
+        m_audioBackend.setAudioReady(false);
+#endif
     ps2_stubs::resetMpegStubState();
     initializeEeKernelState(m_memory.getRDRAM());
     m_cpuContext.r[4] = _mm_setzero_si128();

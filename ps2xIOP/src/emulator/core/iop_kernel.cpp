@@ -478,6 +478,12 @@ namespace ps2x::iop::detail
         return (mode & 1u) != 0u ? (event.bits & bits) != 0u : (event.bits & bits) == bits;
     }
 
+    bool IopKernel::eventFlagSatisfied(int id, uint32_t bits, uint32_t mode) const
+    {
+        const auto event = m_eventFlags.find(id);
+        return event != m_eventFlags.end() && eventSatisfied(event->second, bits, mode);
+    }
+
     void IopKernel::wakeEventWaiters(EventFlag &event)
     {
         for (auto &[threadId, thread] : m_threads)

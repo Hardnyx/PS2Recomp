@@ -67,6 +67,9 @@ namespace ps2x::iop::detail
         void terminateThreadsInRange(uint32_t base, uint32_t size);
 
         [[nodiscard]] size_t threadCount() const noexcept { return m_threads.size(); }
+        [[nodiscard]] bool inThread() const noexcept { return m_currentThread != nullptr; }
+        // WaitEventFlag(id, bits, mode) would return now. False for an unknown flag.
+        [[nodiscard]] bool eventFlagSatisfied(int id, uint32_t bits, uint32_t mode) const;
 
     private:
         struct Semaphore
