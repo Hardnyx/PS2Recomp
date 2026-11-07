@@ -1743,6 +1743,14 @@ void EeScheduler::applyPendingPreemption()
 void EeScheduler::processPendingEvents()
 {
     assertExecutor();
+    const uint64_t deadline = m_nextDeadlineCycle.load(std::memory_order_acquire);
+    if (!m_checkpointPending.load(std::memory_order_acquire) &&
+        (deadline == 0u || m_eeCycle < deadline))
+    {
+        applyPendingPreemption();
+        return;
+    }
+
     processDueDeadlines();
     const uint32_t timerInterrupts = m_pendingEeTimerInterrupts;
     m_pendingEeTimerInterrupts = 0u;
