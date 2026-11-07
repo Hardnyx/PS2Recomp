@@ -893,7 +893,7 @@ void register_ps2_vu1_tests()
             }
         });
 
-        tc.Run("EATAN variants use the documented EFU coefficients", [](TestCase &t)
+        tc.Run("EATAN variants evaluate the documented arctangent", [](TestCase &t)
         {
             Vu1Fixture fx;
             t.IsTrue(fx.initialize(), "VU1 fixture should initialize");
@@ -903,25 +903,39 @@ void register_ps2_vu1_tests()
                 makeVuLowerSpecial(0x7Bu, 0u),
                 kVuUpperNop); // WAITP
 
-            constexpr uint8_t opcodes[] = {0x74u, 0x75u, 0x7Cu};
-            for (const uint8_t opcode : opcodes)
+            struct EatanCase
+            {
+                uint8_t opcode;
+                uint8_t component;
+                float ratio;
+                float scale;
+            };
+            constexpr EatanCase cases[] = {
+                {0x74u, 0u, 0.5f, 7.0f},
+                {0x75u, 0u, 1.0f / 7.0f, 7.0f},
+                {0x7Cu, 3u, 1.0f / 7.0f, 7.0f},
+                {0x74u, 0u, 0.5f, std::numeric_limits<float>::max()},
+                {0x75u, 0u, 1.0f / 7.0f, std::numeric_limits<float>::max()},
+            };
+            for (const EatanCase &entry : cases)
             {
                 writeVuInstructionPair(
                     fx.code, 0u,
-                    makeVuLowerSpecial(opcode, 1u),
+                    makeVuLowerSpecial(entry.opcode, 1u, 0u, 0u, entry.component),
                     kVuUpperNop);
 
                 VU1Interpreter vu1;
-                vu1.state().vf[1][0] = opcode == 0x7Cu ? 0.75f : 1.0f;
-                vu1.state().vf[1][1] = 0.75f;
-                vu1.state().vf[1][2] = 0.75f;
+                vu1.state().vf[1][0] = entry.scale;
+                vu1.state().vf[1][1] = entry.scale * 0.5f;
+                vu1.state().vf[1][2] = entry.scale / 7.0f;
+                vu1.state().vf[1][3] = 1.0f / 7.0f;
                 vu1.execute(fx.code, PS2_VU1_CODE_SIZE,
                             fx.data, PS2_VU1_DATA_SIZE, fx.gs, &fx.mem,
                             0u, 0u, 0u, 55u);
 
-                constexpr float expected = 1.42889927f; // EFU polynomial at 0.75.
+                const float expected = std::atan(entry.ratio);
                 t.IsTrue(std::abs(vu1.state().p - expected) < 1.0e-6f,
-                         "EATAN should evaluate the documented polynomial");
+                         "EATAN should approximate the arctangent of the selected input");
             }
         });
 

@@ -10,8 +10,14 @@
 
 namespace
 {
-    float vuEatan(float value)
+    float vuEatan(float numerator, float denominator)
     {
+        // Reduce the ratio in double precision to avoid overflowing finite inputs.
+        const double sum = static_cast<double>(numerator) + denominator;
+        if (sum == 0.0)
+            return 0.0f;
+        const float value = static_cast<float>((static_cast<double>(numerator) - denominator) / sum);
+
         constexpr float coefficients[] = {
             0.999999344348907f,
             -0.333298563957214f,
@@ -705,14 +711,14 @@ void VU1Interpreter::execLower(uint32_t instr, uint8_t *vuData, uint32_t dataSiz
             {
                 const float x = normalizeOperand(m_state.vf[vfS][0]);
                 const float y = normalizeOperand(m_state.vf[vfS][1]);
-                queueP(x != 0.0f ? vuEatan(y / x) : 0.0f, 54u);
+                queueP(x != 0.0f ? vuEatan(y, x) : 0.0f, 54u);
                 return;
             }
             case 0x75: // EATANxz
             {
                 const float x = normalizeOperand(m_state.vf[vfS][0]);
                 const float z = normalizeOperand(m_state.vf[vfS][2]);
-                queueP(x != 0.0f ? vuEatan(z / x) : 0.0f, 54u);
+                queueP(x != 0.0f ? vuEatan(z, x) : 0.0f, 54u);
                 return;
             }
             case 0x76: // ESUM
@@ -763,7 +769,7 @@ void VU1Interpreter::execLower(uint32_t instr, uint8_t *vuData, uint32_t dataSiz
             case 0x7C: // EATAN
             {
                 const uint32_t component = (instr >> 21) & 3u;
-                queueP(vuEatan(normalizeOperand(m_state.vf[vfS][component])), 54u);
+                queueP(vuEatan(normalizeOperand(m_state.vf[vfS][component]), 1.0f), 54u);
                 return;
             }
             case 0x7D: // EEXP
