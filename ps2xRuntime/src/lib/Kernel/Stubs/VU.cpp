@@ -82,7 +82,9 @@ namespace ps2_stubs
                 {
                     for (int k = 0; k < 4; ++k)
                     {
-                        out[4 * i + j] += rhs[4 * k + j] * lhs[4 * i + k];
+                        // TEKKEN_VU_MATRIX_FLOAT_V1: preserve PS2 exponent-255 arithmetic.
+                        out[4 * i + j] = ps2_fadd(out[4 * i + j],
+                            ps2_fmul(rhs[4 * k + j], lhs[4 * i + k]));
                     }
                 }
             }

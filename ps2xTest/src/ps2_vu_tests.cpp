@@ -4,6 +4,7 @@
 #include "runtime/ps2_memory.h"
 #include "Kernel/Stubs/VU.h"
 
+#include <bit>
 #include <cmath>
 #include <cstdint>
 #include <cstring>
@@ -294,6 +295,58 @@ void register_ps2_vu_tests()
                 }
             }
             t.IsTrue(allMatch, "MulMatrix(dst, I, A) should equal A");
+        });
+
+        tc.Run("MulMatrix_zero_factor_handles_extended_PS2_values", [](TestCase &t)
+        {
+            VuEnv env;
+            constexpr uint32_t encodings[] = {
+                0x7F800000u, 0x7FC12345u, 0x7FFFFFFFu,
+                0xFF800000u, 0xFFC12345u, 0xFFFFFFFFu};
+            for (const uint32_t encoding : encodings)
+            {
+                float source[16]{};
+                source[6] = std::bit_cast<float>(encoding);
+                float zero[16]{};
+                writeMat4(env, kA, source);
+                writeMat4(env, kB, zero);
+                for (const bool swap : {false, true})
+                {
+                    SET_GPR_U32(&env.ctx, 4, kDst);
+                    SET_GPR_U32(&env.ctx, 5, swap ? kB : kA);
+                    SET_GPR_U32(&env.ctx, 6, swap ? kA : kB);
+                    ps2_stubs::sceVu0MulMatrix(env.rdram.data(), &env.ctx, &env.runtime);
+                    float out[16]{};
+                    readMat4(env, kDst, out);
+                    for (const float value : out)
+                        t.IsTrue(value == 0.0f,
+                                 "A zero matrix factor must suppress finite PS2 exponent-255 values");
+                }
+            }
+        });
+
+        tc.Run("MulMatrix_identity_preserves_extended_PS2_values", [](TestCase &t)
+        {
+            VuEnv env;
+            float identity[16]{};
+            makeIdentity(identity);
+            float source[16]{};
+            makeIdentity(source);
+            source[6] = std::bit_cast<float>(0xFFC12345u);
+            writeMat4(env, kA, source);
+            writeMat4(env, kB, identity);
+            for (const bool swap : {false, true})
+            {
+                SET_GPR_U32(&env.ctx, 4, kDst);
+                SET_GPR_U32(&env.ctx, 5, swap ? kB : kA);
+                SET_GPR_U32(&env.ctx, 6, swap ? kA : kB);
+                ps2_stubs::sceVu0MulMatrix(env.rdram.data(), &env.ctx, &env.runtime);
+                float out[16]{};
+                readMat4(env, kDst, out);
+                for (unsigned i = 0; i < 16u; ++i)
+                    t.Equals(std::bit_cast<uint32_t>(out[i]), std::bit_cast<uint32_t>(source[i]),
+                             "Identity multiplication must preserve PS2 exponent-255 bits");
+            }
         });
 
         tc.Run("MulMatrix_equals_arg1_times_arg2", [](TestCase &t)
