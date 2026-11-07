@@ -893,6 +893,38 @@ void register_ps2_vu1_tests()
             }
         });
 
+        tc.Run("EATAN variants use the documented EFU coefficients", [](TestCase &t)
+        {
+            Vu1Fixture fx;
+            t.IsTrue(fx.initialize(), "VU1 fixture should initialize");
+
+            writeVuInstructionPair(
+                fx.code, 8u,
+                makeVuLowerSpecial(0x7Bu, 0u),
+                kVuUpperNop); // WAITP
+
+            constexpr uint8_t opcodes[] = {0x74u, 0x75u, 0x7Cu};
+            for (const uint8_t opcode : opcodes)
+            {
+                writeVuInstructionPair(
+                    fx.code, 0u,
+                    makeVuLowerSpecial(opcode, 1u),
+                    kVuUpperNop);
+
+                VU1Interpreter vu1;
+                vu1.state().vf[1][0] = opcode == 0x7Cu ? 0.75f : 1.0f;
+                vu1.state().vf[1][1] = 0.75f;
+                vu1.state().vf[1][2] = 0.75f;
+                vu1.execute(fx.code, PS2_VU1_CODE_SIZE,
+                            fx.data, PS2_VU1_DATA_SIZE, fx.gs, &fx.mem,
+                            0u, 0u, 0u, 55u);
+
+                constexpr float expected = 1.42889927f; // EFU polynomial at 0.75.
+                t.IsTrue(std::abs(vu1.state().p - expected) < 1.0e-6f,
+                         "EATAN should evaluate the documented polynomial");
+            }
+        });
+
         tc.Run("E and enabled D/T stop with their architectural delay rules", [](TestCase &t)
         {
             Vu1Fixture fx;
