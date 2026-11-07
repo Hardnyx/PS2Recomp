@@ -361,6 +361,8 @@ public:
 
     void SignalException(R5900Context *ctx, PS2Exception exception);
 
+    // VU0 clients can borrow only the kzvu session owned by this memory on their thread.
+    static bool hasKzvuVu1Session(const PS2Memory &memory) noexcept;
     void executeVU0Microprogram(uint8_t *rdram, R5900Context *ctx, uint32_t address);
     void vu0StartMicroProgram(uint8_t *rdram, R5900Context *ctx, uint32_t address);
 

@@ -530,7 +530,7 @@ if(PS2X_ENABLE_KZVU_VU1)
     endif()
     target_sources(ps2_runtime PRIVATE src/lib/vu/ps2_vu1_kzvu.cpp)
     target_link_libraries(ps2_runtime PRIVATE kzvu)
-    set_property(SOURCE src/lib/ps2_runtime.cpp APPEND PROPERTY COMPILE_DEFINITIONS PS2X_KZVU_VU1=1)
+    target_compile_definitions(ps2_runtime PRIVATE PS2X_KZVU_VU1=1)
 endif()
 
 target_link_libraries(ps2EntryRunner

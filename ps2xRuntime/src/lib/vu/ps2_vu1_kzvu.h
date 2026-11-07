@@ -16,6 +16,7 @@ public:
     PS2Vu1Kzvu(const PS2Vu1Kzvu &) = delete;
     PS2Vu1Kzvu &operator=(const PS2Vu1Kzvu &) = delete;
 
+    static bool ownsSession(const PS2Memory &memory) noexcept;
     static bool tryExecute(PS2Memory &memory, VU1State &state, std::optional<uint32_t> startPc,
                            uint32_t top, uint32_t itop, uint32_t maxCycles);
 

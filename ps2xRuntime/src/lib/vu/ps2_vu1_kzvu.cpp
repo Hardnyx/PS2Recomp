@@ -52,10 +52,15 @@ PS2Vu1Kzvu::~PS2Vu1Kzvu()
     kzvuShutdown();
 }
 
+bool PS2Vu1Kzvu::ownsSession(const PS2Memory &memory) noexcept
+{
+    return activeSession && &activeSession->m_memory == &memory;
+}
+
 bool PS2Vu1Kzvu::tryExecute(PS2Memory &memory, VU1State &state, std::optional<uint32_t> startPc,
                            uint32_t top, uint32_t itop, uint32_t maxCycles)
 {
-    if (!activeSession || &activeSession->m_memory != &memory)
+    if (!ownsSession(memory))
         return false;
     activeSession->execute(state, startPc, top, itop, maxCycles);
     return true;

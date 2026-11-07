@@ -5,6 +5,7 @@
 #include "runtime/ps2_memory.h"
 #include "runtime/ps2_vu1.h"
 #if defined(PS2X_TEST_KZVU_VU1)
+#include "ps2_runtime.h"
 #include "vu/ps2_vu1_kzvu.h"
 #endif
 
@@ -12,6 +13,7 @@
 #include <cstdint>
 #include <cstring>
 #include <limits>
+#include <thread>
 #include <vector>
 
 namespace
@@ -234,8 +236,21 @@ void register_ps2_vu1_tests()
             writeVuInstructionPair(fx.code, 24u, lowerNop, kVuUpperNop);
 
             VU1State state{};
+            t.IsTrue(!PS2Runtime::hasKzvuVu1Session(fx.mem),
+                     "Memory should not expose an inactive session");
             {
                 PS2Vu1Kzvu session(fx.mem, true);
+                t.IsTrue(PS2Runtime::hasKzvuVu1Session(fx.mem),
+                         "VU0 can share the session for this memory");
+                const PS2Memory unrelatedMemory;
+                t.IsTrue(!PS2Runtime::hasKzvuVu1Session(unrelatedMemory),
+                         "A second memory should not borrow this session");
+                bool otherThreadHasSession = true;
+                std::thread checkOtherThread([&] {
+                    otherThreadHasSession = PS2Runtime::hasKzvuVu1Session(fx.mem);
+                });
+                checkOtherThread.join();
+                t.IsTrue(!otherThreadHasSession, "A second thread should not borrow this session");
                 t.IsTrue(PS2Vu1Kzvu::tryExecute(fx.mem, state, 0u, 0u, 0u, 256u),
                          "The selected backend should execute MSCAL");
                 t.Equals(state.pc, 16u, "TPC should follow the first end delay slot");
@@ -247,6 +262,8 @@ void register_ps2_vu1_tests()
                 std::memcpy(&value, fx.data, sizeof value);
                 t.Equals(value, 42u, "The second program should see the first program's VI state");
             }
+            t.IsTrue(!PS2Runtime::hasKzvuVu1Session(fx.mem),
+                     "Session teardown should clear the borrowing check");
             t.IsTrue(!PS2Vu1Kzvu::tryExecute(fx.mem, state, 0u, 0u, 0u, 256u),
                      "The session should release the VU1 backend");
         });

@@ -1440,6 +1440,16 @@ void PS2Runtime::SignalException(R5900Context *ctx, PS2Exception exception)
                        exception == EXCEPTION_TLB_REFILL);
 }
 
+bool PS2Runtime::hasKzvuVu1Session(const PS2Memory &memory) noexcept
+{
+#if defined(PS2X_KZVU_VU1)
+    return PS2Vu1Kzvu::ownsSession(memory);
+#else
+    (void)memory;
+    return false;
+#endif
+}
+
 void PS2Runtime::executeVU0Microprogram(uint8_t *rdram, R5900Context *ctx, uint32_t address)
 {
     (void)rdram;
