@@ -7,12 +7,14 @@
 #if defined(PS2X_TEST_KZVU_VU1)
 #include "ps2_runtime.h"
 #include "vu/ps2_vu1_kzvu.h"
+#include "kzvu.h"
 #endif
 
 #include <cmath>
 #include <cstdint>
 #include <cstring>
 #include <limits>
+#include <iostream>
 #include <thread>
 #include <vector>
 
@@ -223,6 +225,100 @@ void register_ps2_vu1_tests()
     MiniTest::Case("PS2VU1", [](TestCase &tc)
     {
 #if defined(PS2X_TEST_KZVU_VU1)
+        tc.Run("kzvu terminal LQ and ADD expose reference cycle counts", [](TestCase &t)
+        {
+            struct Case
+            {
+                const char *name;
+                bool useLq;
+                bool lateIssue;
+            };
+            constexpr Case cases[] = {
+                {"LQ early", true, false},
+                {"LQ late", true, true},
+                {"ADD early", false, false},
+                {"ADD late", false, true},
+            };
+
+            for (const Case &sample : cases)
+            {
+                Vu1Fixture fx;
+                t.IsTrue(fx.initialize(), "VU1 fixture should initialize");
+                if (!fx.code || !fx.data)
+                    continue;
+
+                const uint32_t issuePc = sample.lateIssue ? 8u : 0u;
+                if (sample.useLq)
+                {
+                    const float source[4] = {1.5f, 2.5f, -3.5f, 4.5f};
+                    writeVuQword(fx.data, 1u, source);
+                    writeVuInstructionPair(
+                        fx.code, issuePc, makeVuLq(0xFu, 3u, 0u, 1), kVuUpperNop);
+                }
+                else
+                {
+                    writeVuInstructionPair(
+                        fx.code, issuePc, 0u,
+                        makeVuUpper(0x28u, 0xFu, 2u, 1u, 3u)); // ADD.xyzw vf3, vf1, vf2
+                }
+                writeVuInstructionPair(
+                    fx.code, 16u, 0u, kVuUpperNop | 0x40000000u); // E-bit
+                writeVuInstructionPair(fx.code, 24u, 0u, kVuUpperNop); // delay slot
+
+                VU1Interpreter native;
+                if (!sample.useLq)
+                {
+                    native.state().vf[1][0] = 2.0f;
+                    native.state().vf[2][0] = 7.0f;
+                }
+                native.execute(
+                    fx.code, PS2_VU1_CODE_SIZE, fx.data, PS2_VU1_DATA_SIZE,
+                    fx.gs, &fx.mem, 0u, 0u, 0u, 256u);
+
+                VU1State reference{};
+                {
+                    PS2Vu1Kzvu session(fx.mem, true);
+                    if (!sample.useLq)
+                    {
+                        const float source1[4] = {2.0f, 0.0f, 0.0f, 0.0f};
+                        const float source2[4] = {7.0f, 0.0f, 0.0f, 0.0f};
+                        uint32_t raw1[4]{};
+                        uint32_t raw2[4]{};
+                        std::memcpy(raw1, source1, sizeof raw1);
+                        std::memcpy(raw2, source2, sizeof raw2);
+                        kzvuSetVF(1, raw1);
+                        kzvuSetVF(2, raw2);
+                    }
+
+                    t.IsTrue(
+                        PS2Vu1Kzvu::tryExecute(fx.mem, reference, 0u, 0u, 0u, 256u),
+                        "the optional interpreter must run the terminal program");
+                    t.Equals(reference.pc, native.state().pc,
+                             "native and kzvu must stop at the same E-bit delay-slot PC");
+
+                    uint32_t actual[4]{};
+                    kzvuGetVF(3, actual);
+                    for (uint32_t lane = 0; lane < 4; ++lane)
+                    {
+                        uint32_t expected = 0;
+                        std::memcpy(&expected, &native.state().vf[3][lane], sizeof expected);
+                        t.Equals(actual[lane], expected,
+                                 "native and kzvu terminal VF output bits must match");
+                    }
+                }
+                t.IsTrue(native.state().cycles > 0u && reference.cycles > 0u,
+                         "both interpreters must report elapsed VU cycles");
+                const int64_t delta = static_cast<int64_t>(reference.cycles) -
+                                      static_cast<int64_t>(native.state().cycles);
+                std::cout << "[VU1 terminal-cycle comparison] " << sample.name
+                          << " native=" << native.state().cycles
+                          << " kzvu=" << reference.cycles
+                          << " delta=" << delta << '\n';
+                // Deliberately do not assert cycle parity until the terminal
+                // drain's guest-observable timing contract is established.
+            }
+        });
+
         tc.Run("kzvu MSCNT starts at TPC and retains the prior program state", [](TestCase &t)
         {
             Vu1Fixture fx;
