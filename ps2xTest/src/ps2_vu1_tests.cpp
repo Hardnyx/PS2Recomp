@@ -247,6 +247,12 @@ void register_ps2_vu1_tests()
                 if (!fx.code || !fx.data)
                     continue;
 
+                // Decode the unused issue slot and E-bit delay slot as true
+                // lower-pipe NOPs on both the native and PCSX2 interpreters.
+                constexpr uint32_t lowerNop = 0x8000033cu;
+                writeVuInstructionPair(fx.code, 0u, lowerNop, kVuUpperNop);
+                writeVuInstructionPair(fx.code, 8u, lowerNop, kVuUpperNop);
+
                 const uint32_t issuePc = sample.lateIssue ? 8u : 0u;
                 if (sample.useLq)
                 {
@@ -258,12 +264,12 @@ void register_ps2_vu1_tests()
                 else
                 {
                     writeVuInstructionPair(
-                        fx.code, issuePc, 0u,
+                        fx.code, issuePc, lowerNop,
                         makeVuUpper(0x28u, 0xFu, 2u, 1u, 3u)); // ADD.xyzw vf3, vf1, vf2
                 }
                 writeVuInstructionPair(
-                    fx.code, 16u, 0u, kVuUpperNop | 0x40000000u); // E-bit
-                writeVuInstructionPair(fx.code, 24u, 0u, kVuUpperNop); // delay slot
+                    fx.code, 16u, lowerNop, kVuUpperNop | 0x40000000u); // E-bit
+                writeVuInstructionPair(fx.code, 24u, lowerNop, kVuUpperNop); // delay slot
 
                 VU1Interpreter native;
                 if (!sample.useLq)
