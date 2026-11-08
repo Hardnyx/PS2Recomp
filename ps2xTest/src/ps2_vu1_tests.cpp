@@ -268,6 +268,62 @@ void register_ps2_vu1_tests()
                      "The session should release the VU1 backend");
         });
 #endif
+        tc.Run("VU1 cycle budget slices preserve E-bit drain and guest state", [](TestCase &t)
+        {
+            Vu1Fixture fx;
+            t.IsTrue(fx.initialize(), "VU1 fixture should initialize");
+
+            writeVuInstructionPair(
+                fx.code, 0u, 0u,
+                makeVuUpper(0x28u, 0x8u, 2u, 1u, 3u)); // ADD.x vf3, vf1, vf2
+            writeVuInstructionPair(
+                fx.code, 8u, 0u, kVuUpperNop | 0x40000000u); // E-bit
+            writeVuInstructionPair(fx.code, 16u, 0u, kVuUpperNop); // E delay slot
+
+            VU1Interpreter single;
+            single.state().vf[1][0] = 1.0f;
+            single.state().vf[2][0] = 10.0f;
+            single.execute(
+                fx.code, PS2_VU1_CODE_SIZE, fx.data, PS2_VU1_DATA_SIZE,
+                fx.gs, &fx.mem, 0u, 0u, 0u, 32u);
+
+            VU1Interpreter sliced;
+            sliced.state().vf[1][0] = 1.0f;
+            sliced.state().vf[2][0] = 10.0f;
+            sliced.execute(
+                fx.code, PS2_VU1_CODE_SIZE, fx.data, PS2_VU1_DATA_SIZE,
+                fx.gs, &fx.mem, 0u, 0u, 0u, 1u);
+            t.Equals(sliced.state().cycles, static_cast<uint64_t>(1u),
+                     "the first pair consumes exactly one issue cycle");
+            t.Equals(sliced.state().vf[3][0], 0.0f,
+                     "the FMAC result is pending across the first budget boundary");
+
+            sliced.resume(
+                fx.code, PS2_VU1_CODE_SIZE, fx.data, PS2_VU1_DATA_SIZE,
+                fx.gs, &fx.mem, 0u, 0u, 1u);
+            t.Equals(sliced.state().cycles, static_cast<uint64_t>(2u),
+                     "the E-bit pair consumes one more cycle without ending early");
+            t.Equals(sliced.state().vf[3][0], 0.0f,
+                     "FMAC writeback remains pending at the second budget boundary");
+
+            sliced.resume(
+                fx.code, PS2_VU1_CODE_SIZE, fx.data, PS2_VU1_DATA_SIZE,
+                fx.gs, &fx.mem, 0u, 0u, 1u);
+
+            t.Equals(single.state().cycles, static_cast<uint64_t>(4u),
+                     "terminal FMAC drain counts beyond the three issued pairs");
+            t.Equals(sliced.state().cycles, single.state().cycles,
+                     "budget slicing must not lose or double-count drain cycles");
+            t.Equals(sliced.state().pc, single.state().pc,
+                     "budget slicing must preserve the E-bit delay-slot stop PC");
+            t.Equals(sliced.state().vf[3][0], single.state().vf[3][0],
+                     "budget slicing must preserve the committed FMAC output");
+            t.Equals(sliced.state().vf[3][0], 11.0f,
+                     "the pending FMAC result must commit before E-bit completion");
+            t.Equals(sliced.state().status, single.state().status,
+                     "budget slicing must preserve FMAC status flags");
+        });
+
         tc.Run("upper ADD applies the destination mask", [](TestCase &t)
         {
             Vu1Fixture fx;
