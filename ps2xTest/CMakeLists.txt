@@ -57,6 +57,8 @@ target_link_libraries(ps2_test_lib PRIVATE
 
 if(PS2X_ENABLE_KZVU_VU1)
     target_compile_definitions(ps2_test_lib PRIVATE PS2X_TEST_KZVU_VU1=1)
+    # Optional component tests query kzvu's public register accessors directly.
+    target_link_libraries(ps2_test_lib PRIVATE kzvu)
 endif()
 
 if(UNIX AND NOT APPLE)
