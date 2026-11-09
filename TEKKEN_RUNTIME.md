@@ -320,9 +320,19 @@ VIF1 channel completion and a single DMAC cause after the command
 stream has finished; reprocessing an empty queue must not replay
 either callback or the completion notification.
 
-The exact fork revision is pinned in TekkenTagPort `f312de0` for
-[Windows run 42724298848](https://github.com/Hardnyx/TekkenTagPort/actions/runs/42724298848).
-This protects the current synchronous callback behavior. It does
+That callback-boundary test was pinned in TekkenTagPort `f312de0`
+for [run 42724298848](https://github.com/Hardnyx/TekkenTagPort/actions/runs/42724298848).
+
+Follow-up fork commit `523beca` adds an independent integration
+control using actual VU1 execution, not callback stubs. It runs
+MSCAL/FLUSHE/FLUSH/FLUSHA/MSCNT across two E-bit-terminated
+microprogram segments, checks that MSCNT preserves the VI register
+value in VU memory, and verifies the terminal TPC and VIF1 CODE.
+Both native and optional KZVU backends are selected. Port commit
+`da175a6` pins this expanded candidate in
+[Windows run 42724782068](https://github.com/Hardnyx/TekkenTagPort/actions/runs/42724782068).
+
+These tests protect the current synchronous callback behavior. It does
 **not** establish that FLUSHE/FLUSH/FLUSHA correctly stall an active
 asynchronous VU1, nor does it validate EE/VU clock overlap or GPU
 packet arrival timing. Production scheduling and hardware register
