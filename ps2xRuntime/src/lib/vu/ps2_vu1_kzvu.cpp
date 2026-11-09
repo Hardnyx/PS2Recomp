@@ -101,5 +101,6 @@ void PS2Vu1Kzvu::execute(VU1State &state, std::optional<uint32_t> startPc,
     const uint32_t stat = kzvuVpuStat();
     state.stoppedByD = (stat & 0x200u) != 0u;
     state.stoppedByT = (stat & 0x400u) != 0u;
+    state.interruptRaised = kzvuTakeInterrupt();
     state.pc = kzvuGetVI(kKzvuTPC) * 8u;
 }

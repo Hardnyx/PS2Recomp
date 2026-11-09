@@ -27,6 +27,7 @@ struct VU1State
     bool tBitEnabled;
     bool stoppedByD;
     bool stoppedByT;
+    bool interruptRaised; // VU1 raised INTC_VU1 for an enabled D/T stop.
     uint32_t top;  // VIF TOP visible to XTOP
     uint32_t itop; // VIF ITOP visible to XITOP
 

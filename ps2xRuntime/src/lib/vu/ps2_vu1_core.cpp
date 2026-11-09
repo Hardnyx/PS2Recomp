@@ -1608,6 +1608,7 @@ void VU1Interpreter::execute(uint8_t *vuCode, uint32_t codeSize,
     m_state.haltAfterDelaySlot = false;
     m_state.stoppedByD = false;
     m_state.stoppedByT = false;
+    m_state.interruptRaised = false;
     m_state.top = top;
     m_state.itop = itop;
     m_state.branchPending = false;
@@ -1629,6 +1630,7 @@ void VU1Interpreter::resume(uint8_t *vuCode, uint32_t codeSize,
     m_state.itop = itop;
     m_state.stoppedByD = false;
     m_state.stoppedByT = false;
+    m_state.interruptRaised = false;
     run(vuCode, codeSize, vuData, dataSize, gs, memory, maxCycles);
 }
 
@@ -1841,6 +1843,7 @@ void VU1Interpreter::run(uint8_t *vuCode, uint32_t codeSize,
         m_pendingHaltD = false;
         m_pendingHaltT = false;
     }
+    m_state.interruptRaised = m_state.stoppedByD || m_state.stoppedByT;
     m_state.cycles = m_cycle;
     if (useVuRounding && previousRoundingMode != -1)
         std::fesetround(previousRoundingMode);

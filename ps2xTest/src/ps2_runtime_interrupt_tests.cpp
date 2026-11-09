@@ -2,6 +2,9 @@
 #include "ps2_runtime.h"
 #include "ps2_syscalls.h"
 #include "runtime/ee_scheduler.h"
+#if defined(PS2X_KZVU_VU1)
+#include "vu/ps2_vu1_kzvu.h"
+#endif
 
 #include <atomic>
 #include <chrono>
@@ -48,6 +51,8 @@ namespace
     };
 
     std::atomic<uint32_t> g_lastIntcArg{0u};
+    std::atomic<uint32_t> g_lastIntcCause{0u};
+    std::atomic<uint32_t> g_vu1VpuStat{0u};
     constexpr uint32_t kIdleVSyncWaitPc = 0x00160000u;
     constexpr uint32_t kVSyncWaitPc = 0x00160100u;
     constexpr uint32_t kVSyncResumePc = 0x00160110u;
@@ -72,6 +77,9 @@ namespace
     constexpr uint32_t kInvocationQueuePc = 0x00160530u;
     constexpr uint32_t kInvocationQueueResumePc = 0x00160540u;
     constexpr uint32_t kInvocationQueueHandlerPc = 0x00160550u;
+    constexpr uint32_t kVu1IntcWaitPc = 0x00160600u;
+    constexpr uint32_t kVu1IntcResumePc = 0x00160610u;
+    constexpr uint32_t kVu1IntcHandlerPc = 0x00160620u;
 
     constexpr uint32_t kTimer2Count = 0x10001000u;
     constexpr uint32_t kTimer2Mode = 0x10001010u;
@@ -192,6 +200,32 @@ namespace
     }
 
     void schedulerIrqResume(uint8_t *, R5900Context *ctx, PS2Runtime *runtime)
+    {
+        g_dispatchTrace.push_back(3);
+        ctx->pc = 0u;
+        runtime->requestStop();
+    }
+
+    void schedulerVu1IntcHandler(uint8_t *, R5900Context *ctx, PS2Runtime *)
+    {
+        g_dispatchTrace.push_back(2);
+        g_lastIntcCause.store(getRegU32(ctx, 4), std::memory_order_relaxed);
+        g_lastIntcArg.store(getRegU32(ctx, 5), std::memory_order_relaxed);
+        ctx->pc = 0u;
+    }
+
+    void schedulerVu1IntcWait(uint8_t *, R5900Context *ctx, PS2Runtime *runtime)
+    {
+        g_dispatchTrace.push_back(1);
+        runtime->eeScheduler().addIrqHandler(false, 7u, kVu1IntcHandlerPc, true, 0xD17u, 0u, 0u);
+        constexpr uint32_t mscal = 0x14000000u;
+        runtime->memory().processVIF1Data(
+            reinterpret_cast<const uint8_t *>(&mscal), sizeof(mscal));
+        g_vu1VpuStat.store(ctx->vu0_vpu_stat & 0x0600u, std::memory_order_relaxed);
+        ctx->pc = kVu1IntcResumePc;
+    }
+
+    void schedulerVu1IntcResume(uint8_t *, R5900Context *ctx, PS2Runtime *runtime)
     {
         g_dispatchTrace.push_back(3);
         ctx->pc = 0u;
@@ -544,6 +578,75 @@ void register_ps2_runtime_interrupt_tests()
                      "the dispatcher should run wait, IRQ frame, then the resumed base context in exact order");
             t.Equals(g_lastIntcArg.load(std::memory_order_relaxed), 0xCAFEu,
                      "the IRQ frame should receive its registered argument");
+        });
+
+        tc.Run("VU1 D/T stops raise INTC_VU1 through the EE scheduler", [](TestCase &t)
+        {
+            struct Case
+            {
+                const char *name;
+                uint32_t fbrst;
+                uint32_t flag;
+                uint32_t expectedVpuStat;
+                bool expectInterrupt;
+            };
+            constexpr Case cases[] = {
+                {"D-bit enabled", 1u << 10u, 0x10000000u, 0x0200u, true},
+                {"T-bit enabled", 1u << 11u, 0x08000000u, 0x0400u, true},
+                {"D-bit disabled", 0u, 0x10000000u, 0u, false},
+            };
+
+            for (const Case &sample : cases)
+            {
+                TestEnv env;
+                PS2Memory &memory = env.runtime.memory();
+                t.IsTrue(memory.initialize(), "runtime memory should initialize");
+                t.IsTrue(env.runtime.syncCoreSubsystems(),
+                         "runtime VU1 callbacks should bind without opening the host window");
+
+                constexpr uint32_t lowerNop = 0x8000033cu;
+                constexpr uint32_t upperNop = 0x000002FFu;
+                memory.write32(PS2_VU1_CODE_BASE, lowerNop);
+                memory.write32(PS2_VU1_CODE_BASE + 4u, upperNop | sample.flag);
+                memory.write32(PS2_VU1_CODE_BASE + 8u, lowerNop);
+                memory.write32(
+                    PS2_VU1_CODE_BASE + 12u,
+                    sample.expectInterrupt ? upperNop : (upperNop | 0x40000000u));
+                memory.write32(PS2_VU1_CODE_BASE + 16u, lowerNop);
+                memory.write32(PS2_VU1_CODE_BASE + 20u, upperNop);
+
+#if defined(PS2X_KZVU_VU1)
+                PS2Vu1Kzvu kzvuSession(memory, true);
+#endif
+                env.runtime.registerFunction(kVu1IntcWaitPc, schedulerVu1IntcWait);
+                env.runtime.registerFunction(kVu1IntcHandlerPc, schedulerVu1IntcHandler);
+                env.runtime.registerFunction(kVu1IntcResumePc, schedulerVu1IntcResume);
+
+                g_dispatchTrace.clear();
+                g_lastIntcCause.store(0u, std::memory_order_relaxed);
+                g_lastIntcArg.store(0u, std::memory_order_relaxed);
+                g_vu1VpuStat.store(0u, std::memory_order_relaxed);
+
+                R5900Context mainContext{};
+                mainContext.pc = kVu1IntcWaitPc;
+                mainContext.vu0_fbrst = sample.fbrst;
+                env.runtime.eeScheduler().reset(memory.getRDRAM(), mainContext);
+                env.runtime.eeScheduler().run();
+
+                const std::vector<int> expectedTrace =
+                    sample.expectInterrupt ? std::vector<int>{1, 2, 3} : std::vector<int>{1, 3};
+                t.IsTrue(g_dispatchTrace == expectedTrace,
+                         sample.name);
+                t.Equals(g_vu1VpuStat.load(std::memory_order_relaxed),
+                         sample.expectedVpuStat,
+                         "VPU_STAT should expose only the enabled D/T stop bit");
+                t.Equals(g_lastIntcCause.load(std::memory_order_relaxed),
+                         sample.expectInterrupt ? 7u : 0u,
+                         "an enabled VU1 D/T stop should dispatch INTC cause 7");
+                t.Equals(g_lastIntcArg.load(std::memory_order_relaxed),
+                         sample.expectInterrupt ? 0xD17u : 0u,
+                         "the VU1 interrupt handler should receive its registered argument");
+            }
         });
 
         tc.Run("IRQ callbacks use an isolated invocation stack", [](TestCase &t)
