@@ -309,6 +309,25 @@ priority across devices, or immediate mid-instruction preemption;
 completion of the Windows regression is necessary before treating
 the candidate as accepted.
 
+## VIF1 DMA synchronous completion boundary
+
+Fork candidate `a615c72` adds a component-level VIF1 DMA regression
+with `BASE`, `OFFSET`, `ITOP`, `MSCAL`, `FLUSHE`, `FLUSH`,
+`FLUSHA`, and `MSCNT` in two command qwords. The test records both
+microprogram callback invocations, their TOP/ITOP and double-buffer
+state, and CHCR.STR/D_STAT at each callback. It then verifies the
+VIF1 channel completion and a single DMAC cause after the command
+stream has finished; reprocessing an empty queue must not replay
+either callback or the completion notification.
+
+The exact fork revision is pinned in TekkenTagPort `f312de0` for
+[Windows run 42724298848](https://github.com/Hardnyx/TekkenTagPort/actions/runs/42724298848).
+This protects the current synchronous callback behavior. It does
+**not** establish that FLUSHE/FLUSH/FLUSHA correctly stall an active
+asynchronous VU1, nor does it validate EE/VU clock overlap or GPU
+packet arrival timing. Production scheduling and hardware register
+semantics were not changed by this test.
+
 ## Windows regression commands
 
 Run from the fork root in an initialized MSVC x64 tools environment. These
