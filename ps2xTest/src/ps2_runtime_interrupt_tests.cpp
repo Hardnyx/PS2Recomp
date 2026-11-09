@@ -646,6 +646,69 @@ void register_ps2_runtime_interrupt_tests()
             }
         });
 
+        tc.Run("VIF1 MSCAL and MSCNT preserve state in one command stream", [](TestCase &t)
+        {
+#if defined(PS2X_TEST_KZVU_VU1)
+            constexpr bool referenceSelections[] = {false, true};
+#else
+            constexpr bool referenceSelections[] = {false};
+#endif
+            constexpr uint32_t lowerNop = 0x8000033cu;
+            constexpr uint32_t upperNop = 0x000002FFu;
+            constexpr uint32_t upperEnd = upperNop | 0x40000000u;
+            constexpr uint32_t setVi1 = (0x08u << 25) | (1u << 16) | 42u;
+            constexpr uint32_t storeVi1 = (0x05u << 25) | (0x8u << 21) | (1u << 16);
+            constexpr uint32_t commands[] = {
+                0x14000000u, // MSCAL 0
+                0x17000000u, // MSCNT at the TPC saved after the first E-bit
+            };
+
+            for (const bool referenceSelected : referenceSelections)
+            {
+                TestEnv env;
+                PS2Memory &memory = env.runtime.memory();
+                t.IsTrue(memory.initialize(), "VIF1 test memory should initialize");
+                if (!memory.getVU1Code() || !memory.getVU1Data())
+                    continue;
+                t.IsTrue(env.runtime.syncCoreSubsystems(),
+                         "VIF1/VU1 callbacks should initialize");
+
+                // The first program writes VI1; the second stores it to VU
+                // memory. Both terminate through an E-bit delay slot.
+                constexpr uint32_t pairs[][2] = {
+                    {setVi1, upperEnd},
+                    {lowerNop, upperNop},
+                    {storeVi1, upperEnd},
+                    {lowerNop, upperNop},
+                };
+                for (uint32_t i = 0u; i < 4u; ++i)
+                {
+                    memory.write32(PS2_VU1_CODE_BASE + i * 8u, pairs[i][0]);
+                    memory.write32(PS2_VU1_CODE_BASE + i * 8u + 4u, pairs[i][1]);
+                }
+
+#if defined(PS2X_TEST_KZVU_VU1)
+                std::unique_ptr<PS2Vu1Kzvu> referenceSession;
+                if (referenceSelected)
+                    referenceSession = std::make_unique<PS2Vu1Kzvu>(memory, true);
+#endif
+
+                memory.processVIF1Data(
+                    reinterpret_cast<const uint8_t *>(commands), sizeof(commands));
+
+                uint32_t storedVi1 = 0u;
+                std::memcpy(&storedVi1, memory.getVU1Data(), sizeof storedVi1);
+                t.Equals(storedVi1, 42u,
+                         "MSCNT should see the VI state written by MSCAL");
+                t.Equals(env.runtime.vu1().state().pc, 32u,
+                         "both microprograms must consume their E-bit delay slots");
+                t.IsTrue(!env.runtime.vu1().state().budgetExhausted,
+                         "the second VU1 program must stop normally");
+                t.IsTrue(env.runtime.vu1().state().cycles >= 4u,
+                         "the two programs must account for four issued pairs");
+            }
+        });
+
         tc.Run("VU1 D/T stops raise INTC_VU1 through the EE scheduler", [](TestCase &t)
         {
             struct Case
