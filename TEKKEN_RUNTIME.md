@@ -135,8 +135,16 @@ VIF1 and VU1 execution.
 
 A subsequent scalar-characterization test at `d5efa4b` examines FDIV Q
 and EFU P across E-bit termination and an explicit WAITQ/WAITP program
-started by MSCNT. Its CI result is not part of the validated
-`4b8f4f9` checkpoint.
+started by MSCNT. Test commit `eb4785e` adds two LQ/SQ controls: same-pair
+reads of the prior VF value and next-pair reads of the pending LQ result.
+These compare the native register and memory outputs against the pinned
+KZVU/PCSX2 interpreter without asserting identical elapsed cycles.
+
+PCSX2 classifies LQ/SQ as `VUPIPE_FMAC` for register-hazard checks; the
+native interpreter uses `PipelineLsu` with per-component VF availability.
+The classification difference is not, by itself, a reproduced defect.
+The scalar and LQ/SQ tests are candidates until their respective CI runs
+finish; the validated checkpoint remains `4b8f4f9`.
 
 ## Windows regression commands
 
