@@ -52,7 +52,8 @@ changed contracts; they do not certify every game or full Tekken compatibility.
 | EFU arithmetic | Correct the EATAN coefficient and reduce inputs before polynomial evaluation | `1e0ab41`, `396899e` |
 | Scheduler | Skip pending-event scans when no work or deadline requires them, preserving deferred preemption | `dc70c62` |
 | SDK matrix arithmetic | Use PS2 multiply/add semantics so exponent-255 values do not contaminate zero-weighted matrix components | `175f843` |
-| SDK XYZ vector arithmetic | Compute XYZ-only inner products and normalization, clear W, normalize small nonzero directions | `81784b0` (Windows CI pending) |
+| SDK XYZ vector arithmetic | Compute XYZ-only inner products and normalization, clear W, normalize small nonzero directions | `81784b0`; five regressions passed under both configurations, one unrelated KZVU state-sync failure in initial run |
+| SDK matrix composition | Apply the second source matrix before the first for the SDK's column-vector composition ABI | `4f67469` (Windows CI pending) |
 | VU1 cycle characterization | Add 17 synthetic cases for terminal-drain timing across NOP, IADDIU, LQ and ADD | `33ded8c`, `3909c55`, `ed06c15` |
 | VU1 D/T interrupt propagation | Consume KZVU's VU1 interrupt latch and dispatch EE INTC cause 7 through the scheduler | `a65079b`, `597d0f6`, `946dd03`; Windows CI passed 453/455 |
 
@@ -61,7 +62,7 @@ old generated code does not change their address semantics. Runtime-only changes
 require rebuilding the affected library and consumers. Neither generated guest
 code nor proprietary test data belongs in this repository.
 
-## SDK XYZ vector helpers
+## SDK vector and matrix helpers
 
 Commit `81784b0` moves two general VU SDK corrections from the port's
 reversible source patches to `Kernel/Stubs/VU.cpp`. `sceVu0InnerProduct`
@@ -73,13 +74,27 @@ implementation included W in the inner product and normalized all four
 components using a `1.0e-6f` cutoff, so these cases distinguish the change
 from its previous behavior.
 
-The corresponding port installers `fix_vu_inner_product.ps1` and
-`fix_vu_normalize.ps1` must remain available for the currently pinned
-revision. Do not execute either against a checkout that already includes
-this correction. Retire those installers only when a clean integrated
-dependency revision reproduces the existing game controls. The new fork
-test revision is under Windows CI, and no normal Tekken runner was rebuilt
-as part of this commit.
+The initial Windows run at this source revision passed all five new
+SDK tests in both configurations. Its optional job was not green because
+an earlier KZVU state adapter failed the separate TOP/ITOP regression.
+Fix `8a81b57` mirrors committed VI registers and current TOP/ITOP into
+the public VU1 state at each slice boundary; the corresponding Windows
+run is pending.
+
+Commit `4f67469` also migrates the port's matrix composition correction.
+The SDK's `sceVu0MulMatrix(dst, m0, m1)` composes transformations as
+`m1*m0` under the internal row-vector multiply; composing `m0*m1`
+reversed noncommuting operations. Two additional regressions compare
+successive `sceVu0ApplyMatrix` calls and products with overlapping
+destinations. The earlier unit test expecting `m0*m1` was updated to
+express the corrected contract. This revision is under Windows CI.
+
+Port installers `fix_vu_inner_product.ps1`,
+`fix_vu_normalize.ps1` and `fix_vu_matrix_order.ps1` remain necessary
+for the currently pinned engine. Do not apply them to source that already
+contains these changes, and do not retire them until a clean integrated
+dependency and the game's visual controls are validated. No normal
+Tekken runner was rebuilt by these fork commits.
 
 ## Optional VU1 backend
 
