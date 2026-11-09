@@ -143,8 +143,24 @@ KZVU/PCSX2 interpreter without asserting identical elapsed cycles.
 PCSX2 classifies LQ/SQ as `VUPIPE_FMAC` for register-hazard checks; the
 native interpreter uses `PipelineLsu` with per-component VF availability.
 The classification difference is not, by itself, a reproduced defect.
-The scalar and LQ/SQ tests are candidates until their respective CI runs
-finish; the validated checkpoint remains `4b8f4f9`.
+GitHub Actions runs `42664819709` and `42666102235` passed
+respectively: 453/457 and 453/458 default/optional tests. FDIV Q and ESADD P
+returned matching final scalar results, with a one-cycle terminal difference.
+The LQ/SQ register and memory tests also matched, while the two compound
+programs differed by one or two elapsed cycles.
+
+A six-case control matrix at `4d9a627` passed run `42669177529`:
+453/453 default and 459/459 optional tests. Its observed cycle counts were
+NOP 4/4, LQ 4/5, SQ 4/5, ADD 4/5, independent LQ + ADD 4/5,
+and dependent LQ -> SQ 7/9 (native/KZVU). This isolates a distinct
+load-to-store dependency cost in addition to the one-cycle difference of
+individual operations, without identifying which clock convention is
+hardware-correct.
+
+Candidate `aa014d3` extends the comparison to ten programs with the same
+E-bit at PC 64 and LQ-to-SQ issue distances of 1 through 7 pairs, plus
+NOP/LQ/SQ controls. It separates issue stalls from short-program terminal
+drain by moving termination later. Its CI result is pending.
 
 ## Windows regression commands
 
@@ -181,10 +197,11 @@ At cycle-test candidate `ed06c15`, GitHub Actions run `42572369030` passed
 cycle-characterization matrix. D/T interrupt candidate `946dd03` passed
 Windows run `42574393855`: 453/453 default and 455/455 optional tests.
 The resumable-budget candidate `4b8f4f9` passed run `42577229400`:
-453/453 default and 456/456 optional tests. Counts refer to exact tested
-revisions and should not be carried forward without rerunning CI. These
-results do not substitute for live gameplay validation or a physical-hardware
-timing capture.
+453/453 default and 456/456 optional tests. The scalar and isolated LQ/SQ
+matrix at `4d9a627` passed run `42669177529`, with 453/453 default and
+459/459 optional tests. Counts refer to exact tested revisions and should
+not be carried forward without rerunning CI. These results do not substitute
+for live gameplay validation or a physical-hardware timing capture.
 
 The port's visible matrix controls remove matched long fighter streaks and reach
 short combat intervals on additional teams. Mesh, fog/lighting and texture errors
