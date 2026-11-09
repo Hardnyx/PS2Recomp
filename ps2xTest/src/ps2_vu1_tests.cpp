@@ -225,19 +225,29 @@ void register_ps2_vu1_tests()
     MiniTest::Case("PS2VU1", [](TestCase &tc)
     {
 #if defined(PS2X_TEST_KZVU_VU1)
-        tc.Run("kzvu terminal LQ and ADD expose reference cycle counts", [](TestCase &t)
+        tc.Run("kzvu terminal cycle counts separate FMAC and non-FMAC cases", [](TestCase &t)
         {
+            enum class Operation
+            {
+                Nop,
+                Iaddiu,
+                Lq,
+                Add,
+            };
             struct Case
             {
                 const char *name;
-                bool useLq;
+                Operation operation;
                 bool lateIssue;
             };
             constexpr Case cases[] = {
-                {"LQ early", true, false},
-                {"LQ late", true, true},
-                {"ADD early", false, false},
-                {"ADD late", false, true},
+                {"NOP control", Operation::Nop, false},
+                {"IADDIU early", Operation::Iaddiu, false},
+                {"IADDIU late", Operation::Iaddiu, true},
+                {"LQ early", Operation::Lq, false},
+                {"LQ late", Operation::Lq, true},
+                {"ADD early", Operation::Add, false},
+                {"ADD late", Operation::Add, true},
             };
 
             for (const Case &sample : cases)
@@ -247,32 +257,42 @@ void register_ps2_vu1_tests()
                 if (!fx.code || !fx.data)
                     continue;
 
-                // Decode the unused issue slot and E-bit delay slot as true
-                // lower-pipe NOPs on both the native and PCSX2 interpreters.
+                // PCSX2 classifies LQ and ADD on FMAC. NOP and IADDIU are
+                // controls for terminal completion without an FMAC write.
                 constexpr uint32_t lowerNop = 0x8000033cu;
                 writeVuInstructionPair(fx.code, 0u, lowerNop, kVuUpperNop);
                 writeVuInstructionPair(fx.code, 8u, lowerNop, kVuUpperNop);
 
                 const uint32_t issuePc = sample.lateIssue ? 8u : 0u;
-                if (sample.useLq)
+                switch (sample.operation)
+                {
+                case Operation::Nop:
+                    break;
+                case Operation::Iaddiu:
+                    writeVuInstructionPair(
+                        fx.code, issuePc, makeVuIaddiu(1u, 0u, 42), kVuUpperNop);
+                    break;
+                case Operation::Lq:
                 {
                     const float source[4] = {1.5f, 2.5f, -3.5f, 4.5f};
                     writeVuQword(fx.data, 1u, source);
                     writeVuInstructionPair(
                         fx.code, issuePc, makeVuLq(0xFu, 3u, 0u, 1), kVuUpperNop);
+                    break;
                 }
-                else
-                {
+                case Operation::Add:
                     writeVuInstructionPair(
                         fx.code, issuePc, lowerNop,
                         makeVuUpper(0x28u, 0xFu, 2u, 1u, 3u)); // ADD.xyzw vf3, vf1, vf2
+                    break;
                 }
+
                 writeVuInstructionPair(
                     fx.code, 16u, lowerNop, kVuUpperNop | 0x40000000u); // E-bit
                 writeVuInstructionPair(fx.code, 24u, lowerNop, kVuUpperNop); // delay slot
 
                 VU1Interpreter native;
-                if (!sample.useLq)
+                if (sample.operation == Operation::Add)
                 {
                     native.state().vf[1][0] = 2.0f;
                     native.state().vf[2][0] = 7.0f;
@@ -284,7 +304,7 @@ void register_ps2_vu1_tests()
                 VU1State reference{};
                 {
                     PS2Vu1Kzvu session(fx.mem, true);
-                    if (!sample.useLq)
+                    if (sample.operation == Operation::Add)
                     {
                         const float source1[4] = {2.0f, 0.0f, 0.0f, 0.0f};
                         const float source2[4] = {7.0f, 0.0f, 0.0f, 0.0f};
@@ -302,21 +322,35 @@ void register_ps2_vu1_tests()
                     t.Equals(reference.pc, native.state().pc,
                              "native and kzvu must stop at the same E-bit delay-slot PC");
 
-                    uint32_t actual[4]{};
-                    kzvuGetVF(3, actual);
-                    for (uint32_t lane = 0; lane < 4; ++lane)
+                    if (sample.operation == Operation::Iaddiu)
                     {
-                        uint32_t expected = 0;
-                        std::memcpy(&expected, &native.state().vf[3][lane], sizeof expected);
-                        t.Equals(actual[lane], expected,
-                                 "native and kzvu terminal VF output bits must match");
+                        t.Equals(kzvuGetVI(1u), static_cast<uint32_t>(native.state().vi[1]),
+                                 "native and kzvu IADDIU results must match");
+                    }
+                    else if (sample.operation == Operation::Lq ||
+                             sample.operation == Operation::Add)
+                    {
+                        uint32_t actual[4]{};
+                        kzvuGetVF(3, actual);
+                        for (uint32_t lane = 0; lane < 4; ++lane)
+                        {
+                            uint32_t expected = 0;
+                            std::memcpy(&expected, &native.state().vf[3][lane], sizeof expected);
+                            t.Equals(actual[lane], expected,
+                                     "native and kzvu terminal VF output bits must match");
+                        }
                     }
                 }
                 t.IsTrue(native.state().cycles > 0u && reference.cycles > 0u,
                          "both interpreters must report elapsed VU cycles");
                 const int64_t delta = static_cast<int64_t>(reference.cycles) -
                                       static_cast<int64_t>(native.state().cycles);
+                const char *pipeline =
+                    sample.operation == Operation::Iaddiu ? "IALU" :
+                    (sample.operation == Operation::Lq || sample.operation == Operation::Add) ? "FMAC" :
+                    "none";
                 std::cout << "[VU1 terminal-cycle comparison] " << sample.name
+                          << " pipeline=" << pipeline
                           << " native=" << native.state().cycles
                           << " kzvu=" << reference.cycles
                           << " delta=" << delta << '\n';
