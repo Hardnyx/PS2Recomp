@@ -11,6 +11,8 @@
 #include <cstdint>
 #include <cstring>
 #include <exception>
+#include <iostream>
+#include <memory>
 #include <string_view>
 #include <thread>
 #include <utility>
@@ -578,6 +580,70 @@ void register_ps2_runtime_interrupt_tests()
                      "the dispatcher should run wait, IRQ frame, then the resumed base context in exact order");
             t.Equals(g_lastIntcArg.load(std::memory_order_relaxed), 0xCAFEu,
                      "the IRQ frame should receive its registered argument");
+        });
+
+        tc.Run("VU1 runaway microprogram reaches the synchronous cycle limit", [](TestCase &t)
+        {
+#if defined(PS2X_TEST_KZVU_VU1)
+            constexpr bool referenceSelections[] = {false, true};
+#else
+            constexpr bool referenceSelections[] = {false};
+#endif
+            constexpr uint32_t lowerNop = 0x8000033cu;
+            constexpr uint32_t upperNop = 0x000002FFu;
+            constexpr uint32_t mscal = 0x14000000u;
+            constexpr uint64_t maximumCycles = 1ull << 20u;
+
+            for (const bool referenceSelected : referenceSelections)
+            {
+                TestEnv env;
+                PS2Memory &memory = env.runtime.memory();
+                t.IsTrue(memory.initialize(), "VU1 runtime memory should initialize");
+                if (!memory.getVU1Code())
+                    continue;
+                t.IsTrue(env.runtime.syncCoreSubsystems(),
+                         "VU1 runtime callbacks should initialize");
+
+                // No E-bit exists in the entire 16 KiB microprogram. The VU
+                // wraps its code PC and cannot report a normal completion.
+                uint8_t *code = memory.getVU1Code();
+                for (uint32_t pc = 0u; pc + 8u <= PS2_VU1_CODE_SIZE; pc += 8u)
+                {
+                    std::memcpy(code + pc, &lowerNop, sizeof lowerNop);
+                    std::memcpy(code + pc + 4u, &upperNop, sizeof upperNop);
+                }
+
+#if defined(PS2X_TEST_KZVU_VU1)
+                std::unique_ptr<PS2Vu1Kzvu> referenceSession;
+                if (referenceSelected)
+                    referenceSession = std::make_unique<PS2Vu1Kzvu>(memory, true);
+#endif
+
+                bool reportedLimit = false;
+                try
+                {
+                    memory.processVIF1Data(
+                        reinterpret_cast<const uint8_t *>(&mscal), sizeof mscal);
+                }
+                catch (const std::runtime_error &error)
+                {
+                    reportedLimit = std::string_view(error.what()) ==
+                        "VU1 microprogram exceeded the synchronous execution limit";
+                }
+
+                t.IsTrue(reportedLimit,
+                         "a nonterminating microprogram must fail at the bounded cycle limit");
+                t.IsTrue(env.runtime.vu1().state().budgetExhausted,
+                         "a budget stop must not be reported as a completed microprogram");
+                t.IsTrue(env.runtime.vu1().state().cycles >= maximumCycles,
+                         "the synchronous budget must cover the configured execution ceiling");
+                std::cout << "[VU1 bounded execution] backend="
+                          << (referenceSelected ? "kzvu" : "native")
+                          << " cycles=" << env.runtime.vu1().state().cycles
+                          << " budget_exhausted="
+                          << env.runtime.vu1().state().budgetExhausted
+                          << '\n';
+            }
         });
 
         tc.Run("VU1 D/T stops raise INTC_VU1 through the EE scheduler", [](TestCase &t)
