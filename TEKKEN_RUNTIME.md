@@ -247,6 +247,33 @@ or establish asynchronous VIF1/VU1 timing. The default handler path
 continues to use the scheduler's syscall-level cause mask. Do not
 treat the MMIO test as full interrupt-controller compatibility.
 
+### Hardware and SDK mask ownership
+
+Candidate `49e57dd` removes the duplicate scheduler-only EE INTC cause mask.
+`EeScheduler::dispatchIrq` now reads the guest-visible sixteen-bit
+`INTC_MASK` (`0x1000F010`) before queuing a non-DMAC handler; its
+`INTC_STAT` source remains latched even when masked. The mask starts at
+zero after memory initialization. `EnableIntc` and `DisableIntc` modify
+the same hardware register idempotently: they read the current bit and
+write it only if a change is needed, because the register toggles on
+write-one. Direct guest MMIO writes are therefore effective immediately
+at subsequent interrupt dispatch boundaries.
+
+A dedicated scheduler test covers repeated SDK calls, mixed SDK/MMIO
+mask changes, independent sources, a distinct DMAC cause filter, and
+VBlank delivery both masked and enabled. Existing VBlank, VU1 D/T and
+Timer2 handler fixtures explicitly enable their sources rather than
+relying on a permissive scheduler default. TekkenTagPort commit
+`20fc089` pins this candidate in
+[Windows run 42707197853](https://github.com/Hardnyx/TekkenTagPort/actions/runs/42707197853).
+
+This is the synchronous scheduler's delivery gate, not a full EE
+interrupt CPU model. A status bit already latched while masked does not
+yet schedule a new handler solely because the guest unmasks it;
+repeated triggers and CPU interrupt entry/return ordering still need
+independent qualification. Do not claim physical-hardware timing or
+complete interrupt compatibility from these component tests.
+
 ## Windows regression commands
 
 Run from the fork root in an initialized MSVC x64 tools environment. These
