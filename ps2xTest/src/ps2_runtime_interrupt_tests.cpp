@@ -709,6 +709,82 @@ void register_ps2_runtime_interrupt_tests()
             }
         });
 
+        tc.Run("VIF1 MSCAL and MSCNT propagate TOPS and ITOP", [](TestCase &t)
+        {
+#if defined(PS2X_TEST_KZVU_VU1)
+            constexpr bool referenceSelections[] = {false, true};
+#else
+            constexpr bool referenceSelections[] = {false};
+#endif
+            constexpr uint32_t lowerNop = 0x8000033cu;
+            constexpr uint32_t upperNop = 0x000002FFu;
+            constexpr uint32_t upperEnd = upperNop | 0x40000000u;
+            constexpr auto lowerSpecial = [](uint32_t special, uint32_t targetVi)
+            {
+                return (0x40u << 25u) | (targetVi << 16u) |
+                       ((special & 0x7Cu) << 4u) | (special & 3u) | 0x3Cu;
+            };
+            constexpr uint32_t pairs[][2] = {
+                {lowerSpecial(0x68u, 2u), upperNop}, // XTOP vi2
+                {lowerSpecial(0x69u, 3u), upperNop}, // XITOP vi3
+                {lowerNop, upperEnd},
+                {lowerNop, upperNop},
+                {lowerSpecial(0x68u, 4u), upperNop}, // XTOP vi4
+                {lowerSpecial(0x69u, 5u), upperNop}, // XITOP vi5
+                {lowerNop, upperEnd},
+                {lowerNop, upperNop},
+            };
+            constexpr uint32_t commands[] = {
+                0x03000005u, // BASE = 5
+                0x02000003u, // OFFSET = 3; TOPS = BASE; DBF = 0
+                0x04000007u, // ITOPS = 7
+                0x14000000u, // MSCAL 0; TOP = 5, TOPS = 8, DBF = 1
+                0x17000000u, // MSCNT; TOP = 8, TOPS = 5, DBF = 0
+            };
+
+            for (const bool referenceSelected : referenceSelections)
+            {
+                TestEnv env;
+                PS2Memory &memory = env.runtime.memory();
+                t.IsTrue(memory.initialize(), "VIF1 memory should initialize");
+                if (!memory.getVU1Code())
+                    continue;
+                t.IsTrue(env.runtime.syncCoreSubsystems(),
+                         "VIF1 microprogram callbacks should initialize");
+
+                for (uint32_t i = 0u; i < 8u; ++i)
+                {
+                    memory.write32(PS2_VU1_CODE_BASE + i * 8u, pairs[i][0]);
+                    memory.write32(PS2_VU1_CODE_BASE + i * 8u + 4u, pairs[i][1]);
+                }
+#if defined(PS2X_TEST_KZVU_VU1)
+                std::unique_ptr<PS2Vu1Kzvu> referenceSession;
+                if (referenceSelected)
+                    referenceSession = std::make_unique<PS2Vu1Kzvu>(memory, true);
+#endif
+                memory.processVIF1Data(
+                    reinterpret_cast<const uint8_t *>(commands), sizeof commands);
+
+                const VU1State &vu = env.runtime.vu1().state();
+                t.Equals(vu.pc, 64u, "MSCNT should continue from the first delay-slot PC");
+                t.Equals(vu.vi[2], 5, "MSCAL XTOP should read initial BASE");
+                t.Equals(vu.vi[3], 7, "MSCAL XITOP should read the pending ITOP");
+                t.Equals(vu.vi[4], 8, "MSCNT XTOP should read alternate TOPS");
+                t.Equals(vu.vi[5], 7, "MSCNT XITOP should retain the pending ITOP");
+                t.Equals(vu.top, 8u, "last microprogram should retain second TOP");
+                t.Equals(vu.itop, 7u, "last microprogram should retain ITOP");
+                t.IsFalse(vu.budgetExhausted, "MSCNT should terminate normally");
+                t.Equals(memory.vif1_regs.base, 5u, "BASE should remain unchanged");
+                t.Equals(memory.vif1_regs.ofst, 3u, "OFFSET should remain unchanged");
+                t.Equals(memory.vif1_regs.top, 8u, "TOP should track MSCNT buffer");
+                t.Equals(memory.vif1_regs.tops, 5u, "TOPS should toggle to BASE");
+                t.Equals(memory.vif1_regs.itop, 7u, "ITOP should latch ITOPS");
+                t.Equals(memory.vif1_regs.itops, 7u, "ITOPS should remain unchanged");
+                t.Equals(memory.vif1_regs.stat & (1u << 7u), 0u,
+                         "two microprogram dispatches should restore DBF = 0");
+            }
+        });
+
         tc.Run("VU1 D/T stops raise INTC_VU1 through the EE scheduler", [](TestCase &t)
         {
             struct Case
