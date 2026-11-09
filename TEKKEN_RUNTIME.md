@@ -19,12 +19,12 @@ GS/VU0 adapters and visible game controls live in
 
 The port's [dependency manifest](https://github.com/Hardnyx/TekkenTagPort/blob/main/config/dependencies.json)
 pins `97519ea4bb710e197e15962c02e1450eae53dddf` at this checkpoint.
-Fork `main` contains 18 runtime/test commits beyond that pin, plus
-later documentation-only updates. The six reusable runtime changes through
-`175f843` have been reviewed separately; subsequent commits add bounded VU1
-tests and the D/T interrupt integration. None of those commits is installed
-automatically by the port, and publishing `main` does not replace an existing
-patched runtime checkout. Some corrections, including
+Fork `main` contains additional runtime corrections, component tests and
+documentation beyond that pin. The reusable changes through `175f843` have
+separate integration evidence; subsequent commits cover bounded VU1 execution,
+D/T interrupt propagation and SDK vector semantics. None of those commits
+is installed automatically by the port, and publishing `main` does not
+replace an existing patched runtime checkout. Some corrections, including
 SDK matrix arithmetic, also have reversible port installers for those existing
 checkouts. Do not apply such patches twice or discard local integration files
 to reconcile different source revisions.
@@ -52,6 +52,7 @@ changed contracts; they do not certify every game or full Tekken compatibility.
 | EFU arithmetic | Correct the EATAN coefficient and reduce inputs before polynomial evaluation | `1e0ab41`, `396899e` |
 | Scheduler | Skip pending-event scans when no work or deadline requires them, preserving deferred preemption | `dc70c62` |
 | SDK matrix arithmetic | Use PS2 multiply/add semantics so exponent-255 values do not contaminate zero-weighted matrix components | `175f843` |
+| SDK XYZ vector arithmetic | Compute XYZ-only inner products and normalization, clear W, normalize small nonzero directions | `81784b0` (Windows CI pending) |
 | VU1 cycle characterization | Add 17 synthetic cases for terminal-drain timing across NOP, IADDIU, LQ and ADD | `33ded8c`, `3909c55`, `ed06c15` |
 | VU1 D/T interrupt propagation | Consume KZVU's VU1 interrupt latch and dispatch EE INTC cause 7 through the scheduler | `a65079b`, `597d0f6`, `946dd03`; Windows CI passed 453/455 |
 
@@ -59,6 +60,26 @@ Translator changes require regenerating affected local guest sources; relinking
 old generated code does not change their address semantics. Runtime-only changes
 require rebuilding the affected library and consumers. Neither generated guest
 code nor proprietary test data belongs in this repository.
+
+## SDK XYZ vector helpers
+
+Commit `81784b0` moves two general VU SDK corrections from the port's
+reversible source patches to `Kernel/Stubs/VU.cpp`. `sceVu0InnerProduct`
+uses the X/Y/Z lanes only. `sceVu0Normalize` derives length from X/Y/Z,
+normalizes any nonzero XYZ vector and clears W. Five component tests in
+`ps2xTest/src/ps2_vu_tests.cpp` cover nonzero W, zero XYZ, small nonzero
+vectors, in-place output and the raw returned scalar bits. The preceding
+implementation included W in the inner product and normalized all four
+components using a `1.0e-6f` cutoff, so these cases distinguish the change
+from its previous behavior.
+
+The corresponding port installers `fix_vu_inner_product.ps1` and
+`fix_vu_normalize.ps1` must remain available for the currently pinned
+revision. Do not execute either against a checkout that already includes
+this correction. Retire those installers only when a clean integrated
+dependency revision reproduces the existing game controls. The new fork
+test revision is under Windows CI, and no normal Tekken runner was rebuilt
+as part of this commit.
 
 ## Optional VU1 backend
 
