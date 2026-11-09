@@ -357,9 +357,9 @@ void register_ps2_vu1_tests()
                 t.IsTrue(native.state().cycles >= issuedPairs && reference.cycles >= issuedPairs,
                          "both interpreters must account for every issued pair");
                 const int64_t nativeDrain =
-                    static_cast<int64_t>(native.state().cycles - issuedPairs);
+                    static_cast<int64_t>(native.state().cycles) - static_cast<int64_t>(issuedPairs);
                 const int64_t referenceDrain =
-                    static_cast<int64_t>(reference.cycles - issuedPairs);
+                    static_cast<int64_t>(reference.cycles) - static_cast<int64_t>(issuedPairs);
                 const int64_t delta = static_cast<int64_t>(reference.cycles) -
                                       static_cast<int64_t>(native.state().cycles);
                 const char *pipeline =
@@ -375,7 +375,7 @@ void register_ps2_vu1_tests()
                           << " native_drain=" << nativeDrain
                           << " kzvu=" << reference.cycles
                           << " kzvu_drain=" << referenceDrain
-                          << " delta=" << delta << '\\n';
+                          << " delta=" << delta << '\n';
                 // Cycle parity remains observational until the guest-visible
                 // timing contract is established independently.
             }
