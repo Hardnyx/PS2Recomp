@@ -510,6 +510,136 @@ void register_ps2_vu1_tests()
                      "The pending FMAC result should be committed before completion");
         });
 
+        tc.Run("kzvu LQ and SQ timing isolates independent operations", [](TestCase &t)
+        {
+            enum class Probe
+            {
+                Nop,
+                Load,
+                Store,
+                Add,
+                LoadAndIndependentAdd,
+                LoadThenStore
+            };
+            struct Case
+            {
+                const char *name;
+                Probe probe;
+                float expectedVf3;
+                float expectedVf4;
+                float expectedStore;
+            };
+            constexpr Case cases[] = {
+                {"NOP baseline", Probe::Nop, 1.0f, 0.0f, 0.0f},
+                {"LQ only", Probe::Load, 10.0f, 0.0f, 0.0f},
+                {"SQ only", Probe::Store, 1.0f, 0.0f, 1.0f},
+                {"ADD only", Probe::Add, 1.0f, 7.0f, 0.0f},
+                {"LQ plus independent ADD", Probe::LoadAndIndependentAdd, 10.0f, 7.0f, 0.0f},
+                {"LQ followed by dependent SQ", Probe::LoadThenStore, 10.0f, 0.0f, 10.0f},
+            };
+            constexpr uint32_t lowerNop = 0x8000033Cu;
+            constexpr uint32_t end = kVuUpperNop | 0x40000000u;
+            const float loadQword[4] = {10.0f, 20.0f, 30.0f, 40.0f};
+            const float initialVf3[4] = {1.0f, 0.0f, 0.0f, 0.0f};
+            const float initialVf5[4] = {5.0f, 0.0f, 0.0f, 0.0f};
+            const float initialVf2[4] = {2.0f, 0.0f, 0.0f, 0.0f};
+            uint32_t rawVf3[4]{};
+            uint32_t rawVf5[4]{};
+            uint32_t rawVf2[4]{};
+            std::memcpy(rawVf3, initialVf3, sizeof rawVf3);
+            std::memcpy(rawVf5, initialVf5, sizeof rawVf5);
+            std::memcpy(rawVf2, initialVf2, sizeof rawVf2);
+
+            for (const Case &sample : cases)
+            {
+                Vu1Fixture fx;
+                Vu1Fixture nativeFx;
+                t.IsTrue(fx.initialize(), "KZVU timing fixture should initialize");
+                t.IsTrue(nativeFx.initialize(), "native timing fixture should initialize");
+                if (!fx.code || !nativeFx.code)
+                    continue;
+
+                const bool load =
+                    sample.probe == Probe::Load ||
+                    sample.probe == Probe::LoadAndIndependentAdd ||
+                    sample.probe == Probe::LoadThenStore;
+                const bool add =
+                    sample.probe == Probe::Add ||
+                    sample.probe == Probe::LoadAndIndependentAdd;
+                const bool store = sample.probe == Probe::Store;
+                const bool dependentStore = sample.probe == Probe::LoadThenStore;
+
+                const uint32_t lower0 = load
+                    ? makeVuLq(0x8u, 3u, 0u, 1)
+                    : store ? makeVuSq(0x8u, 3u, 0u, 2) : lowerNop;
+                const uint32_t upper0 = add
+                    ? makeVuUpper(0x28u, 0x8u, 2u, 5u, 4u)
+                    : kVuUpperNop;
+                const uint32_t lower8 = dependentStore
+                    ? makeVuSq(0x8u, 3u, 0u, 2)
+                    : lowerNop;
+                for (Vu1Fixture *fixture : {&fx, &nativeFx})
+                {
+                    writeVuQword(fixture->data, 1u, loadQword);
+                    writeVuInstructionPair(fixture->code, 0u, lower0, upper0);
+                    writeVuInstructionPair(fixture->code, 8u, lower8, kVuUpperNop);
+                    writeVuInstructionPair(fixture->code, 16u, lowerNop, end);
+                    writeVuInstructionPair(fixture->code, 24u, lowerNop, kVuUpperNop);
+                }
+
+                VU1Interpreter native;
+                std::memcpy(native.state().vf[2], initialVf2, sizeof initialVf2);
+                std::memcpy(native.state().vf[3], initialVf3, sizeof initialVf3);
+                std::memcpy(native.state().vf[5], initialVf5, sizeof initialVf5);
+                native.execute(nativeFx.code, PS2_VU1_CODE_SIZE,
+                               nativeFx.data, PS2_VU1_DATA_SIZE,
+                               nativeFx.gs, &nativeFx.mem, 0u, 0u, 0u, 256u);
+                t.Equals(native.state().pc, 32u, "native program stop PC");
+                t.Equals(native.state().vf[3][0], sample.expectedVf3,
+                         "native VF3 value");
+                t.Equals(native.state().vf[4][0], sample.expectedVf4,
+                         "native VF4 value");
+                float nativeStore[4]{};
+                readVuQword(nativeFx.data, 2u, nativeStore);
+                t.Equals(nativeStore[0], sample.expectedStore,
+                         "native memory store value");
+
+                VU1State reference{};
+                PS2Vu1Kzvu session(fx.mem, true);
+                kzvuSetVF(2, rawVf2);
+                kzvuSetVF(3, rawVf3);
+                kzvuSetVF(5, rawVf5);
+                t.IsTrue(PS2Vu1Kzvu::tryExecute(
+                             fx.mem, reference, 0u, 0u, 0u, 256u),
+                         "KZVU should execute the isolated pipeline probe");
+                t.IsTrue(!reference.budgetExhausted,
+                         "KZVU should stop at E-bit, not at its cycle budget");
+                t.Equals(reference.pc, native.state().pc,
+                         "both backends should stop after the delay slot");
+
+                uint32_t referenceVf3[4]{};
+                uint32_t referenceVf4[4]{};
+                kzvuGetVF(3, referenceVf3);
+                kzvuGetVF(4, referenceVf4);
+                uint32_t nativeVf3x = 0u;
+                uint32_t nativeVf4x = 0u;
+                std::memcpy(&nativeVf3x, &native.state().vf[3][0], sizeof nativeVf3x);
+                std::memcpy(&nativeVf4x, &native.state().vf[4][0], sizeof nativeVf4x);
+                t.Equals(referenceVf3[0], nativeVf3x, "LQ result bits");
+                t.Equals(referenceVf4[0], nativeVf4x, "ADD result bits");
+                float referenceStore[4]{};
+                readVuQword(fx.data, 2u, referenceStore);
+                t.Equals(referenceStore[0], nativeStore[0], "SQ store result");
+
+                std::cout << "[VU1 isolated pipeline comparison] " << sample.name
+                          << " native_cycles=" << native.state().cycles
+                          << " kzvu_cycles=" << reference.cycles
+                          << " delta=" << static_cast<int64_t>(reference.cycles) -
+                                         static_cast<int64_t>(native.state().cycles)
+                          << '\n';
+            }
+        });
+
         tc.Run("kzvu LQ register hazards preserve same-pair and next-pair reads", [](TestCase &t)
         {
             struct Case
