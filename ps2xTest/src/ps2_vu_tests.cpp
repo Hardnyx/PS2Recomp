@@ -196,6 +196,78 @@ void register_ps2_vu_tests()
             t.IsTrue(nearlyEqual(out[3], 9.0f), "DivVectorXYZ should pass w through unchanged");
         });
 
+        tc.Run("InnerProduct_uses_XYZ_only", [](TestCase &t)
+        {
+            VuEnv env;
+            writeVec4(env, kA, 1.0f, 2.0f, 3.0f, 10.0f);
+            writeVec4(env, kB, 4.0f, 5.0f, 6.0f, 20.0f);
+            SET_GPR_U32(&env.ctx, 4, kA);
+            SET_GPR_U32(&env.ctx, 5, kB);
+            ps2_stubs::sceVu0InnerProduct(env.rdram.data(), &env.ctx, &env.runtime);
+
+            constexpr float expected = 32.0f;
+            t.IsTrue(nearlyEqual(env.ctx.f[0], expected),
+                     "InnerProduct should compute the XYZ dot product without W");
+            t.Equals(getRegU32(&env.ctx, 2), std::bit_cast<uint32_t>(expected),
+                     "InnerProduct should return the scalar result as raw float bits");
+        });
+
+        tc.Run("Normalize_uses_XYZ_and_clears_W", [](TestCase &t)
+        {
+            VuEnv env;
+            writeVec4(env, kA, 3.0f, 4.0f, 0.0f, 99.0f);
+            SET_GPR_U32(&env.ctx, 4, kDst);
+            SET_GPR_U32(&env.ctx, 5, kA);
+            ps2_stubs::sceVu0Normalize(env.rdram.data(), &env.ctx, &env.runtime);
+            float out[4]{};
+            readVec4f(env, kDst, out);
+            t.IsTrue(nearlyEqual(out[0], 0.6f) && nearlyEqual(out[1], 0.8f) &&
+                         out[2] == 0.0f && out[3] == 0.0f,
+                     "Normalize should normalize XYZ independently of W and clear W");
+        });
+
+        tc.Run("Normalize_zero_XYZ_ignores_W", [](TestCase &t)
+        {
+            VuEnv env;
+            writeVec4(env, kA, 0.0f, 0.0f, 0.0f, 10.0f);
+            SET_GPR_U32(&env.ctx, 4, kDst);
+            SET_GPR_U32(&env.ctx, 5, kA);
+            ps2_stubs::sceVu0Normalize(env.rdram.data(), &env.ctx, &env.runtime);
+            float out[4]{};
+            readVec4f(env, kDst, out);
+            t.IsTrue(out[0] == 0.0f && out[1] == 0.0f &&
+                         out[2] == 0.0f && out[3] == 0.0f,
+                     "A zero XYZ direction should not be normalized using its W component");
+        });
+
+        tc.Run("Normalize_small_nonzero_XYZ", [](TestCase &t)
+        {
+            VuEnv env;
+            writeVec4(env, kA, 3.0e-8f, 4.0e-8f, 0.0f, 0.0f);
+            SET_GPR_U32(&env.ctx, 4, kDst);
+            SET_GPR_U32(&env.ctx, 5, kA);
+            ps2_stubs::sceVu0Normalize(env.rdram.data(), &env.ctx, &env.runtime);
+            float out[4]{};
+            readVec4f(env, kDst, out);
+            t.IsTrue(nearlyEqual(out[0], 0.6f) && nearlyEqual(out[1], 0.8f) &&
+                         out[2] == 0.0f && out[3] == 0.0f,
+                     "A nonzero XYZ direction below the former epsilon must normalize");
+        });
+
+        tc.Run("Normalize_supports_in_place_destination", [](TestCase &t)
+        {
+            VuEnv env;
+            writeVec4(env, kA, 0.0f, 0.0f, 5.0f, 7.0f);
+            SET_GPR_U32(&env.ctx, 4, kA);
+            SET_GPR_U32(&env.ctx, 5, kA);
+            ps2_stubs::sceVu0Normalize(env.rdram.data(), &env.ctx, &env.runtime);
+            float out[4]{};
+            readVec4f(env, kA, out);
+            t.IsTrue(out[0] == 0.0f && out[1] == 0.0f &&
+                         nearlyEqual(out[2], 1.0f) && out[3] == 0.0f,
+                     "Normalize should permit the same source and destination address");
+        });
+
         tc.Run("InterVector_lerp", [](TestCase &t)
         {
             VuEnv env;
