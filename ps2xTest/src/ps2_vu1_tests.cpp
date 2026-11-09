@@ -510,6 +510,122 @@ void register_ps2_vu1_tests()
                      "The pending FMAC result should be committed before completion");
         });
 
+        tc.Run("kzvu LQ to SQ distance controls register stalls", [](TestCase &t)
+        {
+            struct Case
+            {
+                const char *name;
+                bool load;
+                bool store;
+                uint32_t storePc;
+                float expectedVf3;
+                float expectedStore;
+            };
+            constexpr Case cases[] = {
+                {"NOP control", false, false, 8u, 1.0f, 0.0f},
+                {"LQ-only control", true, false, 8u, 10.0f, 0.0f},
+                {"SQ-only control", false, true, 8u, 1.0f, 1.0f},
+                {"LQ to SQ distance 1", true, true, 8u, 10.0f, 10.0f},
+                {"LQ to SQ distance 2", true, true, 16u, 10.0f, 10.0f},
+                {"LQ to SQ distance 3", true, true, 24u, 10.0f, 10.0f},
+                {"LQ to SQ distance 4", true, true, 32u, 10.0f, 10.0f},
+                {"LQ to SQ distance 5", true, true, 40u, 10.0f, 10.0f},
+                {"LQ to SQ distance 6", true, true, 48u, 10.0f, 10.0f},
+                {"LQ to SQ distance 7", true, true, 56u, 10.0f, 10.0f},
+            };
+            constexpr uint32_t lowerNop = 0x8000033cu;
+            constexpr uint32_t ebitPc = 64u;
+            constexpr uint32_t delayPc = ebitPc + 8u;
+            constexpr uint64_t issuedPairs = delayPc / 8u + 1u;
+            const float loaded[4] = {10.0f, 20.0f, 30.0f, 40.0f};
+            const float initialVf3[4] = {1.0f, 0.0f, 0.0f, 0.0f};
+            uint32_t rawVf3[4]{};
+            std::memcpy(rawVf3, initialVf3, sizeof rawVf3);
+
+            for (const Case &sample : cases)
+            {
+                Vu1Fixture fx;
+                Vu1Fixture nativeFx;
+                t.IsTrue(fx.initialize(), "KZVU distance fixture should initialize");
+                t.IsTrue(nativeFx.initialize(), "native distance fixture should initialize");
+                if (!fx.code || !nativeFx.code)
+                    continue;
+
+                for (Vu1Fixture *fixture : {&fx, &nativeFx})
+                {
+                    writeVuQword(fixture->data, 1u, loaded);
+                    for (uint32_t pc = 0u; pc <= delayPc; pc += 8u)
+                        writeVuInstructionPair(fixture->code, pc, lowerNop, kVuUpperNop);
+                    if (sample.load)
+                        writeVuInstructionPair(
+                            fixture->code, 0u, makeVuLq(0x8u, 3u, 0u, 1),
+                            kVuUpperNop);
+                    if (sample.store)
+                        writeVuInstructionPair(
+                            fixture->code, sample.storePc,
+                            makeVuSq(0x8u, 3u, 0u, 2), kVuUpperNop);
+                    writeVuInstructionPair(
+                        fixture->code, ebitPc, lowerNop,
+                        kVuUpperNop | 0x40000000u);
+                }
+
+                VU1Interpreter native;
+                std::memcpy(native.state().vf[3], initialVf3, sizeof initialVf3);
+                native.execute(
+                    nativeFx.code, PS2_VU1_CODE_SIZE,
+                    nativeFx.data, PS2_VU1_DATA_SIZE, nativeFx.gs, &nativeFx.mem,
+                    0u, 0u, 0u, 256u);
+                t.Equals(native.state().pc, delayPc + 8u,
+                         "native execution should stop after the E-bit delay slot");
+                t.Equals(native.state().vf[3][0], sample.expectedVf3,
+                         "native load should preserve or update VF3.x as required");
+                float nativeStore[4]{};
+                readVuQword(nativeFx.data, 2u, nativeStore);
+                t.Equals(nativeStore[0], sample.expectedStore,
+                         "native SQ should store the expected VF3.x");
+                t.IsTrue(native.state().cycles >= issuedPairs,
+                         "native cycles should cover all issued pairs");
+
+                VU1State reference{};
+                PS2Vu1Kzvu session(fx.mem, true);
+                kzvuSetVF(3, rawVf3);
+                t.IsTrue(
+                    PS2Vu1Kzvu::tryExecute(fx.mem, reference, 0u, 0u, 0u, 256u),
+                    "KZVU should execute the LQ/SQ distance program");
+                t.IsTrue(!reference.budgetExhausted,
+                         "KZVU should stop at E-bit rather than the cycle budget");
+                t.Equals(reference.pc, native.state().pc,
+                         "both backends should stop at the same delay-slot PC");
+
+                uint32_t referenceVf3[4]{};
+                kzvuGetVF(3, referenceVf3);
+                uint32_t nativeBits = 0u;
+                std::memcpy(&nativeBits, &native.state().vf[3][0], sizeof nativeBits);
+                t.Equals(referenceVf3[0], nativeBits,
+                         "loaded VF3.x bits should agree across interpreters");
+                float referenceStore[4]{};
+                readVuQword(fx.data, 2u, referenceStore);
+                t.Equals(referenceStore[0], nativeStore[0],
+                         "the dependent SQ output should match across interpreters");
+                t.IsTrue(reference.cycles >= issuedPairs,
+                         "reference cycles should cover all issued pairs");
+
+                std::cout << "[VU1 LQ/SQ distance comparison] " << sample.name
+                          << " store_pc=" << sample.storePc
+                          << " issued_pairs=" << issuedPairs
+                          << " native_cycles=" << native.state().cycles
+                          << " kzvu_cycles=" << reference.cycles
+                          << " native_extra=" << (native.state().cycles - issuedPairs)
+                          << " kzvu_extra=" << (reference.cycles - issuedPairs)
+                          << " delta=" << static_cast<int64_t>(reference.cycles) -
+                                         static_cast<int64_t>(native.state().cycles)
+                          << '\n';
+                // Long-program E-bit placement separates issue stalls from
+                // the short-program terminal writeback drain. Cycle parity
+                // remains diagnostic until a hardware contract is proven.
+            }
+        });
+
         tc.Run("kzvu LQ and SQ timing isolates independent operations", [](TestCase &t)
         {
             enum class Probe
