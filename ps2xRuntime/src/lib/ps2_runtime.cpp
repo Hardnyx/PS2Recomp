@@ -677,17 +677,19 @@ bool PS2Runtime::syncCoreSubsystems()
     m_gifArbiter.setProcessPacketFn([this](const uint8_t *data, uint32_t size)
                                     { m_gs.processGIFPacket(data, size); });
     m_memory.setGifArbiter(&m_gifArbiter);
-    const auto dispatchVu1Interrupt = [this](bool hasSchedulerContext)
+    const auto dispatchVu1Interrupt = [this]()
     {
-        if (!m_vu1.state().interruptRaised || !m_eeScheduler || !hasSchedulerContext)
+        if (!m_vu1.state().interruptRaised || !m_eeScheduler ||
+            !m_eeScheduler->isExecutorThread())
+        {
             return;
+        }
         m_eeScheduler->dispatchIrq(false, kIntcVu1Cause);
         m_vu1.state().interruptRaised = false;
     };
     m_memory.setVu1MscalCallback([this, dispatchVu1Interrupt](uint32_t startPC, uint32_t top, uint32_t itop)
                                  {
                                      R5900Context *cpuContext = m_eeScheduler ? m_eeScheduler->currentContext() : nullptr;
-                                     const bool hasSchedulerContext = cpuContext != nullptr;
                                      if (!cpuContext)
                                      {
                                          cpuContext = &m_cpuContext;
@@ -708,11 +710,10 @@ bool PS2Runtime::syncCoreSubsystems()
                                          (cpuContext->vu0_vpu_stat & ~0x0600u) |
                                          (m_vu1.state().stoppedByD ? 0x0200u : 0u) |
                                          (m_vu1.state().stoppedByT ? 0x0400u : 0u);
-                                     dispatchVu1Interrupt(hasSchedulerContext); });
+                                     dispatchVu1Interrupt(); });
     m_memory.setVu1MscntCallback([this, dispatchVu1Interrupt](uint32_t top, uint32_t itop)
                                  {
                                      R5900Context *cpuContext = m_eeScheduler ? m_eeScheduler->currentContext() : nullptr;
-                                     const bool hasSchedulerContext = cpuContext != nullptr;
                                      if (!cpuContext)
                                      {
                                          cpuContext = &m_cpuContext;
@@ -733,7 +734,7 @@ bool PS2Runtime::syncCoreSubsystems()
                                          (cpuContext->vu0_vpu_stat & ~0x0600u) |
                                          (m_vu1.state().stoppedByD ? 0x0200u : 0u) |
                                          (m_vu1.state().stoppedByT ? 0x0400u : 0u);
-                                     dispatchVu1Interrupt(hasSchedulerContext); });
+                                     dispatchVu1Interrupt(); });
     resetIop();
     m_vu0.reset();
     m_vu1.reset();

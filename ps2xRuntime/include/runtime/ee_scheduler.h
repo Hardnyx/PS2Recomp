@@ -281,6 +281,10 @@ public:
     [[nodiscard]] bool checkpointDue(uint32_t cycles = kGeneratedCheckpointCycles) noexcept;
     void accountCycles(uint32_t cycles) noexcept;
     [[nodiscard]] bool isExecutingGuest() const noexcept;
+    [[nodiscard]] bool isExecutorThread() const noexcept
+    {
+        return m_executorThread == std::this_thread::get_id();
+    }
 
     // Kernel object API. All calls except postEvent/requestStop execute on the
     // EE executor and therefore need no host synchronization.

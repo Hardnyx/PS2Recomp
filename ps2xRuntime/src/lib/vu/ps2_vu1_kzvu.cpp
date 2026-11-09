@@ -77,6 +77,7 @@ void PS2Vu1Kzvu::submitPacket(void *user, const uint8_t *data, uint32_t size, ui
 void PS2Vu1Kzvu::execute(VU1State &state, std::optional<uint32_t> startPc,
                         uint32_t top, uint32_t itop, uint32_t maxCycles)
 {
+    state.interruptRaised = false;
     ScopedMxcsr fp;
     m_hostMxcsr = fp.saved;
 
