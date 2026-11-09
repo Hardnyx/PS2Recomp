@@ -157,21 +157,34 @@ load-to-store dependency cost in addition to the one-cycle difference of
 individual operations, without identifying which clock convention is
 hardware-correct.
 
-Candidate `aa014d3` adds ten programs with E-bit at PC 64 and
-LQ-to-SQ issue distances of 1 through 7 pairs, plus NOP/LQ/SQ controls.
-Because an SQ issued at PC 56 may still be inside PCSX2's four-cycle
-FMAC drain at termination, that first sweep does not fully remove the
-terminal effect.
+Fork test `aa014d3` passed [run 42676206344](https://github.com/Hardnyx/TekkenTagPort/actions/runs/42676206344)
+(453 default / 460 optional tests). With E-bit at PC 64 and LQ at PC 0,
+distances 1 through 5 pairs to SQ had identical native/KZVU cycle counts.
+At SQ PCs 48 and 56, reference completion took one and two extra cycles,
+respectively. This suggested terminal draining rather than an issue stall.
 
-Candidate `5b48458` repeats the same controls with an E-bit at PC 96,
-giving even the latest SQ five instruction pairs before termination.
-The resulting 20-case matrix distinguishes issue-distance effects from
-late SQ drain; no timing parity is imposed. Candidate `1c80a64` adds
-an end-to-end MSCAL regression with no E-bit anywhere in VU code memory.
-It checks that both the native and optional KZVU runtimes reject a
-nonterminating program at the 1,048,576-cycle synchronous safety limit,
-without falsely reporting completion. These candidates are not accepted
-until their pinned default and optional Windows jobs finish.
+Fork test `5b48458` repeated the ten controls with a second E-bit at
+PC 96, yielding 20 programs. [Run 42677306854](https://github.com/Hardnyx/TekkenTagPort/actions/runs/42677306854)
+passed 453 default / 460 optional tests. With the later E-bit, all seven
+LQ-to-SQ distances, including PCs 48/56, had identical cycle totals and
+output data in both backends. The remaining discrepancy is localized to
+short-program terminal completion; hardware-correct accounting remains
+unproven.
+
+Fork test `1c80a64` also passed [run 42677768061](https://github.com/Hardnyx/TekkenTagPort/actions/runs/42677768061)
+(454 default / 461 optional tests). An MSCAL microprogram lacking any
+E-bit must terminate with a synchronous-budget error after exactly
+1,048,576 cycles. Both backends retain `budgetExhausted = true`, rather
+than reporting a completed program.
+
+Fork test `89ee955` passed [run 42678754093](https://github.com/Hardnyx/TekkenTagPort/actions/runs/42678754093)
+(455 default / 462 optional tests). An MSCAL and MSCNT in a single VIF1
+command stream preserve VI state, store it to VU memory and advance TPC
+through both E-bit delay slots. Test `35263b3` extends this to BASE,
+OFFSET, TOP/TOPS, ITOP and DBF through a double-buffered pair of VU
+programs; [run 42681060581](https://github.com/Hardnyx/TekkenTagPort/actions/runs/42681060581)
+is pending. Neither test validates asynchronous EE/VU execution, raw DMA
+stall flags, or physical-hardware timing.
 
 ## Windows regression commands
 
