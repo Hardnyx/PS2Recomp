@@ -285,6 +285,30 @@ repeated triggers and CPU interrupt entry/return ordering still need
 independent qualification. Do not claim physical-hardware timing or
 complete interrupt compatibility from these component tests.
 
+### Masked INTC source delivery at EE checkpoints
+
+Candidate `9a2c9ae` retains a sixteen-bit set of sources raised while
+their INTC_MASK bits were disabled. `EeScheduler::processPendingEvents`
+checks this set at guest execution checkpoints, including checkpoints
+without a due host event. A pending source is queued only if its hardware
+INTC_STAT bit is still set and its mask bit is now enabled. Sources
+acknowledged by write-one-to-clear are discarded; repeated raises
+while masked collapse to one deferred handler. An explicitly raised
+source after enabling supersedes its older masked occurrence.
+
+The `unmasking a pending INTC cause replays only uncleared status`
+regression tests both guest MMIO and SDK enablement, with and without
+an earlier acknowledgement, using a registered handler and the EE
+scheduler rather than raw register observations alone. Port commit
+`60ec200` selects the exact fork revision for
+[Windows run 42709216222](https://github.com/Hardnyx/TekkenTagPort/actions/runs/42709216222).
+
+This is a compatibility delivery mechanism at scheduler boundaries.
+It does not implement cycle-accurate EE exception entry, interrupt
+priority across devices, or immediate mid-instruction preemption;
+completion of the Windows regression is necessary before treating
+the candidate as accepted.
+
 ## Windows regression commands
 
 Run from the fork root in an initialized MSVC x64 tools environment. These
