@@ -1255,6 +1255,12 @@ int EeScheduler::setIrqCauseEnabled(bool dmac, uint32_t cause, bool enabled)
 void EeScheduler::dispatchIrq(bool dmac, uint32_t cause)
 {
     assertExecutor();
+    // Hardware INTC status is latched even when a syscall-installed handler
+    // or the scheduler's cause filter suppresses delivery. DMAC has its own
+    // status register and must not enter the EE INTC latch.
+    if (!dmac)
+        m_runtime.memory().latchEeIntcCause(cause);
+
     const uint32_t mask = dmac ? m_enabledDmacMask : m_enabledIntcMask;
     if (cause < 32u && (mask & (1u << cause)) == 0u)
     {

@@ -785,6 +785,42 @@ void register_ps2_runtime_interrupt_tests()
             }
         });
 
+        tc.Run("scheduler latches INTC sources before handler filtering", [](TestCase &t)
+        {
+            TestEnv env;
+            PS2Memory &memory = env.runtime.memory();
+            t.IsTrue(memory.initialize(), "INTC scheduler fixture should initialize");
+
+            R5900Context mainContext{};
+            env.runtime.eeScheduler().reset(memory.getRDRAM(), mainContext);
+            EeScheduler &scheduler = env.runtime.eeScheduler();
+
+            constexpr uint32_t kIntcStat = 0x1000F000u;
+            constexpr uint32_t kVu1 = 1u << 7u;
+            constexpr uint32_t kTimer2 = 1u << 11u;
+
+            scheduler.setIrqCauseEnabled(false, 11u, false);
+            scheduler.dispatchIrq(false, 11u);
+            t.Equals(memory.read32(kIntcStat), kTimer2,
+                     "a filtered timer cause should still latch hardware INTC_STAT");
+
+            scheduler.dispatchIrq(false, 7u);
+            t.Equals(memory.read32(kIntcStat), kTimer2 | kVu1,
+                     "independent INTC causes should accumulate without replacing each other");
+
+            scheduler.dispatchIrq(true, 5u);
+            t.Equals(memory.read32(kIntcStat), kTimer2 | kVu1,
+                     "DMAC dispatch should not change EE INTC_STAT");
+
+            memory.write32(kIntcStat, kTimer2);
+            t.Equals(memory.read32(kIntcStat), kVu1,
+                     "acknowledging a timer cause should preserve a pending VU1 cause");
+
+            memory.write32(kIntcStat, kVu1);
+            t.Equals(memory.read32(kIntcStat), 0u,
+                     "guest status acknowledgement should clear the remaining source");
+        });
+
         tc.Run("VU1 D/T stops raise INTC_VU1 through the EE scheduler", [](TestCase &t)
         {
             struct Case
