@@ -197,6 +197,20 @@ namespace
         g_dispatchTrace.push_back(1);
         EeScheduler &scheduler = runtime->eeScheduler();
         scheduler.addIrqHandler(false, 2u, kIntcHandlerPc, true, 0xCAFEu, 0u, 0u);
+        scheduler.setIrqCauseEnabled(false, 2u, true);
+        ctx->pc = kIrqResumePc;
+        scheduler.waitVSync(scheduler.currentVSyncTick());
+    }
+
+    // Exercise the raw register path without using the SDK's EnableIntc.
+    bool g_enableIntcByMmio = false;
+    void schedulerIrqMmioWait(uint8_t *, R5900Context *ctx, PS2Runtime *runtime)
+    {
+        g_dispatchTrace.push_back(1);
+        EeScheduler &scheduler = runtime->eeScheduler();
+        scheduler.addIrqHandler(false, 2u, kIntcHandlerPc, true, 0xCAFEu, 0u, 0u);
+        if (g_enableIntcByMmio)
+            runtime->memory().write32(0x1000F010u, 1u << 2u);
         ctx->pc = kIrqResumePc;
         scheduler.waitVSync(scheduler.currentVSyncTick());
     }
@@ -220,6 +234,7 @@ namespace
     {
         g_dispatchTrace.push_back(1);
         runtime->eeScheduler().addIrqHandler(false, 7u, kVu1IntcHandlerPc, true, 0xD17u, 0u, 0u);
+        runtime->eeScheduler().setIrqCauseEnabled(false, 7u, true);
         constexpr uint32_t mscal = 0x14000000u;
         runtime->memory().processVIF1Data(
             reinterpret_cast<const uint8_t *>(&mscal), sizeof(mscal));
@@ -252,6 +267,7 @@ namespace
                                 0u,
                                 0u,
                                 kIrqRegistrationSp);
+        scheduler.setIrqCauseEnabled(false, 2u, true);
         ctx->pc = kIrqStackResumePc;
         scheduler.waitVSync(scheduler.currentVSyncTick());
     }
@@ -353,6 +369,7 @@ namespace
         EeScheduler &scheduler = runtime->eeScheduler();
         g_testSemaphoreId = scheduler.createSemaphore(0, 1, 0u, 0u);
         scheduler.addIrqHandler(false, 11u, kTimer2HandlerPc, true, 0u, 0u, 0u);
+        scheduler.setIrqCauseEnabled(false, 11u, true);
 
         PS2Memory &memory = runtime->memory();
         memory.writeIORegister(kTimer2Count, 0u);
@@ -782,6 +799,85 @@ void register_ps2_runtime_interrupt_tests()
                 t.Equals(memory.vif1_regs.itops, 7u, "ITOPS should remain unchanged");
                 t.Equals(memory.vif1_regs.stat & (1u << 7u), 0u,
                          "two microprogram dispatches should restore DBF = 0");
+            }
+        });
+
+        tc.Run("INTC SDK cause enables share hardware MMIO mask", [](TestCase &t)
+        {
+            TestEnv env;
+            PS2Memory &memory = env.runtime.memory();
+            t.IsTrue(memory.initialize(), "INTC mask fixture should initialize");
+
+            R5900Context mainContext{};
+            env.runtime.eeScheduler().reset(memory.getRDRAM(), mainContext);
+            EeScheduler &scheduler = env.runtime.eeScheduler();
+
+            constexpr uint32_t kIntcMask = 0x1000F010u;
+            constexpr uint32_t kVu1 = 1u << 7u;
+            constexpr uint32_t kVBlankStart = 1u << 2u;
+            t.Equals(memory.read32(kIntcMask), 0u,
+                     "EE INTC hardware mask starts disabled");
+
+            t.Equals(scheduler.setIrqCauseEnabled(false, 7u, true), KE_OK,
+                     "EnableIntc should accept the VU1 source");
+            t.Equals(memory.read32(kIntcMask), kVu1,
+                     "EnableIntc must update the hardware register");
+            scheduler.setIrqCauseEnabled(false, 7u, true);
+            t.Equals(memory.read32(kIntcMask), kVu1,
+                     "repeated EnableIntc must not toggle a source off");
+
+            memory.write32(kIntcMask, kVu1 | kVBlankStart);
+            t.Equals(memory.read32(kIntcMask), kVBlankStart,
+                     "guest MMIO writes must affect the same mask as EnableIntc");
+            scheduler.setIrqCauseEnabled(false, 7u, false);
+            t.Equals(memory.read32(kIntcMask), kVBlankStart,
+                     "DisableIntc must be idempotent after a guest MMIO change");
+            scheduler.setIrqCauseEnabled(false, 7u, true);
+            t.Equals(memory.read32(kIntcMask), kVu1 | kVBlankStart,
+                     "EnableIntc must restore a source after guest MMIO disabled it");
+            scheduler.setIrqCauseEnabled(false, 2u, false);
+            t.Equals(memory.read32(kIntcMask), kVu1,
+                     "DisableIntc must preserve unrelated enabled sources");
+            scheduler.setIrqCauseEnabled(false, 7u, false);
+            t.Equals(memory.read32(kIntcMask), 0u,
+                     "independent source disables must restore the reset mask");
+
+            // DMAC uses a separate scheduler filter and cannot modify INTC_MASK.
+            scheduler.setIrqCauseEnabled(true, 5u, false);
+            t.Equals(memory.read32(kIntcMask), 0u,
+                     "EnableDmac/DisableDmac must not alter EE INTC_MASK");
+        });
+
+        tc.Run("guest INTC_MASK write gates VBlank handler delivery", [](TestCase &t)
+        {
+            for (const bool enabled : {false, true})
+            {
+                TestEnv env;
+                PS2Memory &memory = env.runtime.memory();
+                t.IsTrue(memory.initialize(), "VBlank MMIO mask fixture should initialize");
+                env.runtime.registerFunction(kIrqWaitPc, schedulerIrqMmioWait);
+                env.runtime.registerFunction(kIrqResumePc, schedulerIrqResume);
+                env.runtime.registerFunction(kIntcHandlerPc, schedulerIntcHandler);
+
+                g_enableIntcByMmio = enabled;
+                g_dispatchTrace.clear();
+                g_lastIntcArg.store(0u, std::memory_order_relaxed);
+                R5900Context mainContext{};
+                mainContext.pc = kIrqWaitPc;
+                env.runtime.eeScheduler().reset(memory.getRDRAM(), mainContext);
+                env.runtime.eeScheduler().run();
+
+                const std::vector<int> expected =
+                    enabled ? std::vector<int>{1, 2, 3} : std::vector<int>{1, 3};
+                t.IsTrue(g_dispatchTrace == expected,
+                         "raw INTC_MASK must determine whether the VBlank handler runs");
+                t.Equals(memory.read32(0x1000F010u), enabled ? 1u << 2u : 0u,
+                         "the guest-visible mask must match the selected delivery mode");
+                t.IsTrue((memory.read32(0x1000F000u) & (1u << 2u)) != 0u,
+                         "the VBlank cause must latch even while delivery is masked");
+                t.Equals(g_lastIntcArg.load(std::memory_order_relaxed),
+                         enabled ? 0xCAFEu : 0u,
+                         "a masked VBlank must not invoke its registered handler");
             }
         });
 

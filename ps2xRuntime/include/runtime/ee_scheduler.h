@@ -422,7 +422,6 @@ private:
     int m_intcTailOrder = 1000;
     int m_dmacHeadOrder = 0;
     int m_dmacTailOrder = 1000;
-    uint32_t m_enabledIntcMask = 0xFFFFFFFFu;
     uint32_t m_enabledDmacMask = 0xFFFFFFFFu;
     int m_currentThreadId = 0;
     bool m_rescheduleRequested = false;

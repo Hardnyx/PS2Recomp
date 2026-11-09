@@ -104,7 +104,6 @@ void EeScheduler::reset(uint8_t *rdram, const R5900Context &mainContext)
     m_intcTailOrder = 1000;
     m_dmacHeadOrder = 0;
     m_dmacTailOrder = 1000;
-    m_enabledIntcMask = 0xFFFFFFFFu;
     m_enabledDmacMask = 0xFFFFFFFFu;
     m_currentThreadId = 0;
     m_rescheduleRequested = false;
@@ -1237,17 +1236,29 @@ int EeScheduler::setIrqHandlerEnabled(bool dmac, int id, bool enabled)
 int EeScheduler::setIrqCauseEnabled(bool dmac, uint32_t cause, bool enabled)
 {
     assertExecutor();
+    if (!dmac)
+    {
+        // EnableIntc/DisableIntc and guest MMIO must share the one hardware
+        // mask. INTC_MASK is write-one-to-toggle, so SDK calls must be
+        // idempotent rather than blindly writing the cause bit.
+        if (cause < 16u)
+        {
+            constexpr uint32_t kIntcMask = 0x1000F010u;
+            const uint32_t bit = 1u << cause;
+            PS2Memory &memory = m_runtime.memory();
+            const bool currentlyEnabled = (memory.readIORegister(kIntcMask) & bit) != 0u;
+            if (currentlyEnabled != enabled)
+                memory.writeIORegister(kIntcMask, bit);
+        }
+        return KE_OK;
+    }
+
     if (cause < 32u)
     {
-        uint32_t &mask = dmac ? m_enabledDmacMask : m_enabledIntcMask;
         if (enabled)
-        {
-            mask |= 1u << cause;
-        }
+            m_enabledDmacMask |= 1u << cause;
         else
-        {
-            mask &= ~(1u << cause);
-        }
+            m_enabledDmacMask &= ~(1u << cause);
     }
     return KE_OK;
 }
@@ -1255,14 +1266,17 @@ int EeScheduler::setIrqCauseEnabled(bool dmac, uint32_t cause, bool enabled)
 void EeScheduler::dispatchIrq(bool dmac, uint32_t cause)
 {
     assertExecutor();
-    // Hardware INTC status is latched even when a syscall-installed handler
-    // or the scheduler's cause filter suppresses delivery. DMAC has its own
-    // status register and must not enter the EE INTC latch.
+    // A masked source remains pending in hardware INTC_STAT. DMAC has its
+    // own status/enable registers and retains its independent cause filter.
     if (!dmac)
+    {
         m_runtime.memory().latchEeIntcCause(cause);
-
-    const uint32_t mask = dmac ? m_enabledDmacMask : m_enabledIntcMask;
-    if (cause < 32u && (mask & (1u << cause)) == 0u)
+        constexpr uint32_t kIntcMask = 0x1000F010u;
+        if (cause >= 16u ||
+            (m_runtime.memory().readIORegister(kIntcMask) & (1u << cause)) == 0u)
+            return;
+    }
+    else if (cause < 32u && (m_enabledDmacMask & (1u << cause)) == 0u)
     {
         return;
     }
