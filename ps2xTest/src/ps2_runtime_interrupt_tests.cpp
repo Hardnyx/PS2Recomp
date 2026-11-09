@@ -2,7 +2,7 @@
 #include "ps2_runtime.h"
 #include "ps2_syscalls.h"
 #include "runtime/ee_scheduler.h"
-#if defined(PS2X_KZVU_VU1)
+#if defined(PS2X_TEST_KZVU_VU1)
 #include "vu/ps2_vu1_kzvu.h"
 #endif
 
@@ -615,7 +615,7 @@ void register_ps2_runtime_interrupt_tests()
                 memory.write32(PS2_VU1_CODE_BASE + 16u, lowerNop);
                 memory.write32(PS2_VU1_CODE_BASE + 20u, upperNop);
 
-#if defined(PS2X_KZVU_VU1)
+#if defined(PS2X_TEST_KZVU_VU1)
                 PS2Vu1Kzvu kzvuSession(memory, true);
 #endif
                 env.runtime.registerFunction(kVu1IntcWaitPc, schedulerVu1IntcWait);
