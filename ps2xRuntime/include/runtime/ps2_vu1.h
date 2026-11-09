@@ -28,6 +28,7 @@ struct VU1State
     bool stoppedByD;
     bool stoppedByT;
     bool interruptRaised; // VU1 raised INTC_VU1 for an enabled D/T stop.
+    bool budgetExhausted; // The current execution slice ended before the microprogram stopped.
     uint32_t top;  // VIF TOP visible to XTOP
     uint32_t itop; // VIF ITOP visible to XITOP
 

@@ -78,30 +78,51 @@ void PS2Vu1Kzvu::execute(VU1State &state, std::optional<uint32_t> startPc,
                         uint32_t top, uint32_t itop, uint32_t maxCycles)
 {
     state.interruptRaised = false;
+    state.budgetExhausted = false;
+    state.stoppedByD = false;
+    state.stoppedByT = false;
     ScopedMxcsr fp;
     m_hostMxcsr = fp.saved;
 
+    const bool continuing = kzvuRunning();
     const uint64_t generation = m_memory.getVU1CodeGeneration();
-    if (m_codeGeneration != generation)
+    if (continuing && startPc.has_value())
+        throw std::runtime_error("Cannot issue MSCAL while the kzvu VU1 is still running");
+    if (continuing && m_codeGeneration != generation)
+        throw std::runtime_error("VU1 code memory changed while the kzvu backend was running");
+
+    if (!continuing)
     {
-        kzvuWriteMicro(0, m_memory.getVU1Code(), PS2_VU1_CODE_SIZE);
-        m_codeGeneration = generation;
+        if (m_codeGeneration != generation)
+        {
+            kzvuWriteMicro(0, m_memory.getVU1Code(), PS2_VU1_CODE_SIZE);
+            m_codeGeneration = generation;
+        }
+
+        if (startPc.has_value())
+            state.cycles = 0u;
+        auto *const data = m_memory.getVU1Data();
+        std::memcpy(kzvuDataMem(), data, PS2_VU1_DATA_SIZE);
+        kzvuSetTop(top, itop);
+        kzvuSetFBRST((state.dBitEnabled ? 1u << 10 : 0u) |
+                     (state.tBitEnabled ? 1u << 11 : 0u));
     }
 
+    // MSCNT and budget continuation both resume at the saved TPC.
+    const uint32_t entryPc = continuing ? 0xffffffffu : startPc.value_or(0xffffffffu);
+    state.cycles += kzvuExecute(entryPc, maxCycles);
+    state.pc = kzvuGetVI(kKzvuTPC) * 8u;
+    state.budgetExhausted = kzvuRunning();
+
+    // Keep VU data stores visible at every slice boundary. Do not reload this
+    // buffer on a continuation: KZVU still owns the in-flight program state.
     auto *const data = m_memory.getVU1Data();
-    std::memcpy(kzvuDataMem(), data, PS2_VU1_DATA_SIZE);
-    kzvuSetTop(top, itop);
-    kzvuSetFBRST((state.dBitEnabled ? 1u << 10 : 0u) | (state.tBitEnabled ? 1u << 11 : 0u));
-
-    // MSCNT starts a program at the saved TPC, including after an E-bit stop.
-    state.cycles += kzvuExecute(startPc.value_or(0xffffffffu), maxCycles);
-    if (kzvuRunning())
-        throw std::runtime_error("The kzvu VU1 backend exhausted the synchronous execution budget");
-
     std::memcpy(data, kzvuDataMem(), PS2_VU1_DATA_SIZE);
+    if (state.budgetExhausted)
+        return;
+
     const uint32_t stat = kzvuVpuStat();
     state.stoppedByD = (stat & 0x200u) != 0u;
     state.stoppedByT = (stat & 0x400u) != 0u;
     state.interruptRaised = kzvuTakeInterrupt();
-    state.pc = kzvuGetVI(kKzvuTPC) * 8u;
 }

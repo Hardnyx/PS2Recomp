@@ -677,6 +677,46 @@ bool PS2Runtime::syncCoreSubsystems()
     m_gifArbiter.setProcessPacketFn([this](const uint8_t *data, uint32_t size)
                                     { m_gs.processGIFPacket(data, size); });
     m_memory.setGifArbiter(&m_gifArbiter);
+    const auto runVu1ToCompletion = [this](std::optional<uint32_t> startPc,
+                                           uint32_t top, uint32_t itop)
+    {
+        constexpr uint32_t kSliceCycles = 65536u;
+        constexpr uint64_t kMaximumSynchronousCycles = 1u << 20u;
+        uint64_t allocatedCycles = 0u;
+        bool firstSlice = true;
+        do
+        {
+            bool usedKzvu = false;
+#if defined(PS2X_KZVU_VU1)
+            usedKzvu = PS2Vu1Kzvu::tryExecute(
+                m_memory, m_vu1.state(),
+                firstSlice ? startPc : std::nullopt,
+                top, itop, kSliceCycles);
+#endif
+            if (!usedKzvu)
+            {
+                if (firstSlice && startPc.has_value())
+                {
+                    m_vu1.execute(m_memory.getVU1Code(), PS2_VU1_CODE_SIZE,
+                                  m_memory.getVU1Data(), PS2_VU1_DATA_SIZE,
+                                  m_gs, &m_memory, *startPc, top, itop, kSliceCycles);
+                }
+                else
+                {
+                    m_vu1.resume(m_memory.getVU1Code(), PS2_VU1_CODE_SIZE,
+                                 m_memory.getVU1Data(), PS2_VU1_DATA_SIZE,
+                                 m_gs, &m_memory, top, itop, kSliceCycles);
+                }
+            }
+
+            firstSlice = false;
+            if (!m_vu1.state().budgetExhausted)
+                return;
+            allocatedCycles += kSliceCycles;
+        } while (allocatedCycles < kMaximumSynchronousCycles);
+
+        throw std::runtime_error("VU1 microprogram exceeded the synchronous execution limit");
+    };
     const auto dispatchVu1Interrupt = [this]()
     {
         if (!m_vu1.state().interruptRaised || !m_eeScheduler ||
@@ -687,7 +727,7 @@ bool PS2Runtime::syncCoreSubsystems()
         m_eeScheduler->dispatchIrq(false, kIntcVu1Cause);
         m_vu1.state().interruptRaised = false;
     };
-    m_memory.setVu1MscalCallback([this, dispatchVu1Interrupt](uint32_t startPC, uint32_t top, uint32_t itop)
+    m_memory.setVu1MscalCallback([this, dispatchVu1Interrupt, runVu1ToCompletion](uint32_t startPC, uint32_t top, uint32_t itop)
                                  {
                                      R5900Context *cpuContext = m_eeScheduler ? m_eeScheduler->currentContext() : nullptr;
                                      if (!cpuContext)
@@ -698,20 +738,13 @@ bool PS2Runtime::syncCoreSubsystems()
                                          (cpuContext->vu0_fbrst & (1u << 10)) != 0u;
                                      m_vu1.state().tBitEnabled =
                                          (cpuContext->vu0_fbrst & (1u << 11)) != 0u;
-#if defined(PS2X_KZVU_VU1)
-                                     if (!PS2Vu1Kzvu::tryExecute(m_memory, m_vu1.state(), startPC, top, itop, 65536))
-#endif
-                                     {
-                                         m_vu1.execute(m_memory.getVU1Code(), PS2_VU1_CODE_SIZE,
-                                                       m_memory.getVU1Data(), PS2_VU1_DATA_SIZE,
-                                                       m_gs, &m_memory, startPC, top, itop, 65536);
-                                     }
+runVu1ToCompletion(startPC, top, itop);
                                      cpuContext->vu0_vpu_stat =
                                          (cpuContext->vu0_vpu_stat & ~0x0600u) |
                                          (m_vu1.state().stoppedByD ? 0x0200u : 0u) |
                                          (m_vu1.state().stoppedByT ? 0x0400u : 0u);
                                      dispatchVu1Interrupt(); });
-    m_memory.setVu1MscntCallback([this, dispatchVu1Interrupt](uint32_t top, uint32_t itop)
+    m_memory.setVu1MscntCallback([this, dispatchVu1Interrupt, runVu1ToCompletion](uint32_t top, uint32_t itop)
                                  {
                                      R5900Context *cpuContext = m_eeScheduler ? m_eeScheduler->currentContext() : nullptr;
                                      if (!cpuContext)
@@ -722,14 +755,7 @@ bool PS2Runtime::syncCoreSubsystems()
                                          (cpuContext->vu0_fbrst & (1u << 10)) != 0u;
                                      m_vu1.state().tBitEnabled =
                                          (cpuContext->vu0_fbrst & (1u << 11)) != 0u;
-#if defined(PS2X_KZVU_VU1)
-                                     if (!PS2Vu1Kzvu::tryExecute(m_memory, m_vu1.state(), std::nullopt, top, itop, 65536))
-#endif
-                                     {
-                                         m_vu1.resume(m_memory.getVU1Code(), PS2_VU1_CODE_SIZE,
-                                                      m_memory.getVU1Data(), PS2_VU1_DATA_SIZE,
-                                                      m_gs, &m_memory, top, itop, 65536);
-                                     }
+runVu1ToCompletion(std::nullopt, top, itop);
                                      cpuContext->vu0_vpu_stat =
                                          (cpuContext->vu0_vpu_stat & ~0x0600u) |
                                          (m_vu1.state().stoppedByD ? 0x0200u : 0u) |

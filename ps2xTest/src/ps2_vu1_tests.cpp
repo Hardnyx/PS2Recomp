@@ -383,7 +383,9 @@ void register_ps2_vu1_tests()
         tc.Run("kzvu MSCNT starts at TPC and retains the prior program state", [](TestCase &t)
         {
             Vu1Fixture fx;
-            t.IsTrue(fx.initialize(), "VU1 fixture should initialize");
+            Vu1Fixture nativeFx;
+            t.IsTrue(fx.initialize(), "KZVU fixture should initialize");
+            t.IsTrue(nativeFx.initialize(), "native fixture should initialize");
             constexpr uint32_t end = kVuUpperNop | 0x40000000u;
             constexpr uint32_t lowerNop = 0x8000033cu;
             constexpr uint32_t storeVi1 = (0x05u << 25) | (0x8u << 21) | (1u << 16);
@@ -391,6 +393,24 @@ void register_ps2_vu1_tests()
             writeVuInstructionPair(fx.code, 8u, lowerNop, kVuUpperNop);
             writeVuInstructionPair(fx.code, 16u, storeVi1, end);
             writeVuInstructionPair(fx.code, 24u, lowerNop, kVuUpperNop);
+            writeVuInstructionPair(nativeFx.code, 0u, makeVuIaddiu(1u, 0u, 42), end);
+            writeVuInstructionPair(nativeFx.code, 8u, lowerNop, kVuUpperNop);
+            writeVuInstructionPair(nativeFx.code, 16u, storeVi1, end);
+            writeVuInstructionPair(nativeFx.code, 24u, lowerNop, kVuUpperNop);
+
+            VU1Interpreter native;
+            native.execute(nativeFx.code, PS2_VU1_CODE_SIZE,
+                            nativeFx.data, PS2_VU1_DATA_SIZE, nativeFx.gs, &nativeFx.mem,
+                            0u, 0u, 0u, 256u);
+            const uint32_t nativeFirstPc = native.state().pc;
+            const uint64_t nativeFirstCycles = native.state().cycles;
+            native.resume(nativeFx.code, PS2_VU1_CODE_SIZE,
+                          nativeFx.data, PS2_VU1_DATA_SIZE, nativeFx.gs, &nativeFx.mem,
+                          0u, 0u, 256u);
+            const uint32_t nativeFinalPc = native.state().pc;
+            const uint64_t nativeFinalCycles = native.state().cycles;
+            uint32_t nativeStoredValue = 0u;
+            std::memcpy(&nativeStoredValue, nativeFx.data, sizeof(nativeStoredValue));
 
             VU1State state{};
             t.IsTrue(!PS2Runtime::hasKzvuVu1Session(fx.mem),
@@ -410,19 +430,78 @@ void register_ps2_vu1_tests()
                 t.IsTrue(!otherThreadHasSession, "A second thread should not borrow this session");
                 t.IsTrue(PS2Vu1Kzvu::tryExecute(fx.mem, state, 0u, 0u, 0u, 256u),
                          "The selected backend should execute MSCAL");
-                t.Equals(state.pc, 16u, "TPC should follow the first end delay slot");
+                t.Equals(state.pc, nativeFirstPc,
+                         "KZVU TPC after MSCAL should match the native interpreter");
+                t.Equals(state.cycles, nativeFirstCycles,
+                         "MSCAL cycle count should match for the non-FMAC control program");
 
                 t.IsTrue(PS2Vu1Kzvu::tryExecute(fx.mem, state, std::nullopt, 0u, 0u, 256u),
                          "The selected backend should execute MSCNT");
-                t.Equals(state.pc, 32u, "MSCNT should reach the second end delay slot");
+                t.Equals(state.pc, nativeFinalPc,
+                         "MSCNT should resume at TPC and match the native stop PC");
+                t.Equals(state.cycles, nativeFinalCycles,
+                         "MSCNT should preserve the cumulative native cycle count");
+                t.Equals(kzvuGetVI(1u), static_cast<uint32_t>(native.state().vi[1]),
+                         "MSCNT should preserve VI state across the backend boundary");
                 uint32_t value = 0;
                 std::memcpy(&value, fx.data, sizeof value);
                 t.Equals(value, 42u, "The second program should see the first program's VI state");
+                t.Equals(value, nativeStoredValue,
+                         "KZVU and native MSCNT stores should produce the same memory value");
             }
             t.IsTrue(!PS2Runtime::hasKzvuVu1Session(fx.mem),
                      "Session teardown should clear the borrowing check");
             t.IsTrue(!PS2Vu1Kzvu::tryExecute(fx.mem, state, 0u, 0u, 0u, 256u),
                      "The session should release the VU1 backend");
+        });
+
+        tc.Run("kzvu budget slices resume pending FMAC writes", [](TestCase &t)
+        {
+            Vu1Fixture fx;
+            t.IsTrue(fx.initialize(), "VU1 fixture should initialize");
+            writeVuInstructionPair(
+                fx.code, 0u, 0u,
+                makeVuUpper(0x28u, 0x8u, 2u, 1u, 3u)); // ADD.x vf3, vf1, vf2
+            writeVuInstructionPair(
+                fx.code, 8u, 0u, kVuUpperNop | 0x40000000u); // E-bit
+            writeVuInstructionPair(fx.code, 16u, 0u, kVuUpperNop); // E delay slot
+
+            const float source1[4] = {1.0f, 0.0f, 0.0f, 0.0f};
+            const float source2[4] = {10.0f, 0.0f, 0.0f, 0.0f};
+            uint32_t raw1[4]{};
+            uint32_t raw2[4]{};
+            std::memcpy(raw1, source1, sizeof(raw1));
+            std::memcpy(raw2, source2, sizeof(raw2));
+
+            VU1State state{};
+            PS2Vu1Kzvu session(fx.mem, true);
+            kzvuSetVF(1u, raw1);
+            kzvuSetVF(2u, raw2);
+
+            t.IsTrue(PS2Vu1Kzvu::tryExecute(fx.mem, state, 0u, 0u, 0u, 1u),
+                     "The first KZVU slice should execute");
+            t.IsTrue(state.budgetExhausted,
+                     "The first slice should report an unfinished microprogram");
+            t.Equals(state.pc, 8u, "The first slice should preserve the next TPC");
+
+            t.IsTrue(PS2Vu1Kzvu::tryExecute(fx.mem, state, std::nullopt, 0u, 0u, 1u),
+                     "The second KZVU slice should resume at TPC");
+            t.IsTrue(state.budgetExhausted,
+                     "The E-bit pair should still wait for its delay slot");
+            t.Equals(state.pc, 16u, "The second slice should preserve the delay-slot TPC");
+
+            t.IsTrue(PS2Vu1Kzvu::tryExecute(fx.mem, state, std::nullopt, 0u, 0u, 1u),
+                     "The final KZVU slice should execute the delay slot");
+            t.IsTrue(!state.budgetExhausted,
+                     "The microprogram should complete after its E-bit delay slot");
+            t.Equals(state.pc, 24u, "The final TPC should follow the E-bit delay slot");
+
+            uint32_t actual[4]{};
+            kzvuGetVF(3u, actual);
+            float result = 0.0f;
+            std::memcpy(&result, &actual[0], sizeof(result));
+            t.Equals(result, 11.0f,
+                     "The pending FMAC result should be committed before completion");
         });
 #endif
         tc.Run("VU1 cycle budget slices preserve E-bit drain and guest state", [](TestCase &t)
@@ -452,6 +531,8 @@ void register_ps2_vu1_tests()
                 fx.gs, &fx.mem, 0u, 0u, 0u, 1u);
             t.Equals(sliced.state().cycles, static_cast<uint64_t>(1u),
                      "the first pair consumes exactly one issue cycle");
+            t.IsTrue(sliced.state().budgetExhausted,
+                     "the first native slice should report an unfinished microprogram");
             t.Equals(sliced.state().vf[3][0], 0.0f,
                      "the FMAC result is pending across the first budget boundary");
 
@@ -460,6 +541,8 @@ void register_ps2_vu1_tests()
                 fx.gs, &fx.mem, 0u, 0u, 1u);
             t.Equals(sliced.state().cycles, static_cast<uint64_t>(2u),
                      "the E-bit pair consumes one more cycle without ending early");
+            t.IsTrue(sliced.state().budgetExhausted,
+                     "the E-bit delay slot should still be pending at this budget boundary");
             t.Equals(sliced.state().vf[3][0], 0.0f,
                      "FMAC writeback remains pending at the second budget boundary");
 
@@ -467,6 +550,8 @@ void register_ps2_vu1_tests()
                 fx.code, PS2_VU1_CODE_SIZE, fx.data, PS2_VU1_DATA_SIZE,
                 fx.gs, &fx.mem, 0u, 0u, 1u);
 
+            t.IsTrue(!sliced.state().budgetExhausted,
+                     "the final native slice should complete the E-bit delay slot");
             t.Equals(single.state().cycles, static_cast<uint64_t>(4u),
                      "terminal FMAC drain counts beyond the three issued pairs");
             t.Equals(sliced.state().cycles, single.state().cycles,
