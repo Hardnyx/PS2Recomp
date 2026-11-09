@@ -157,10 +157,21 @@ load-to-store dependency cost in addition to the one-cycle difference of
 individual operations, without identifying which clock convention is
 hardware-correct.
 
-Candidate `aa014d3` extends the comparison to ten programs with the same
-E-bit at PC 64 and LQ-to-SQ issue distances of 1 through 7 pairs, plus
-NOP/LQ/SQ controls. It separates issue stalls from short-program terminal
-drain by moving termination later. Its CI result is pending.
+Candidate `aa014d3` adds ten programs with E-bit at PC 64 and
+LQ-to-SQ issue distances of 1 through 7 pairs, plus NOP/LQ/SQ controls.
+Because an SQ issued at PC 56 may still be inside PCSX2's four-cycle
+FMAC drain at termination, that first sweep does not fully remove the
+terminal effect.
+
+Candidate `5b48458` repeats the same controls with an E-bit at PC 96,
+giving even the latest SQ five instruction pairs before termination.
+The resulting 20-case matrix distinguishes issue-distance effects from
+late SQ drain; no timing parity is imposed. Candidate `1c80a64` adds
+an end-to-end MSCAL regression with no E-bit anywhere in VU code memory.
+It checks that both the native and optional KZVU runtimes reject a
+nonterminating program at the 1,048,576-cycle synchronous safety limit,
+without falsely reporting completion. These candidates are not accepted
+until their pinned default and optional Windows jobs finish.
 
 ## Windows regression commands
 
