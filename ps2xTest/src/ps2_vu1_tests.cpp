@@ -510,6 +510,113 @@ void register_ps2_vu1_tests()
                      "The pending FMAC result should be committed before completion");
         });
 
+        tc.Run("kzvu LQ register hazards preserve same-pair and next-pair reads", [](TestCase &t)
+        {
+            struct Case
+            {
+                const char *name;
+                bool samePair;
+                float expectedAdd;
+                float expectedStore;
+            };
+            constexpr Case cases[] = {
+                {"same-pair old VF", true, 3.0f, 3.0f},
+                {"next-pair loaded VF", false, 12.0f, 10.0f},
+            };
+            constexpr uint32_t lowerNop = 0x8000033cu;
+            const float loaded[4] = {10.0f, 20.0f, 30.0f, 40.0f};
+            const float initialVf3[4] = {1.0f, 0.0f, 0.0f, 0.0f};
+            const float vf2[4] = {2.0f, 0.0f, 0.0f, 0.0f};
+            uint32_t rawVf3[4]{};
+            uint32_t rawVf2[4]{};
+            std::memcpy(rawVf3, initialVf3, sizeof rawVf3);
+            std::memcpy(rawVf2, vf2, sizeof rawVf2);
+
+            for (const Case &sample : cases)
+            {
+                Vu1Fixture fx;
+                Vu1Fixture nativeFx;
+                t.IsTrue(fx.initialize(), "KZVU LQ fixture should initialize");
+                t.IsTrue(nativeFx.initialize(), "native LQ fixture should initialize");
+                if (!fx.code || !nativeFx.code)
+                    continue;
+
+                for (Vu1Fixture *fixture : {&fx, &nativeFx})
+                {
+                    writeVuQword(fixture->data, 1u, loaded);
+                    writeVuInstructionPair(
+                        fixture->code, 0u,
+                        makeVuLq(0x8u, 3u, 0u, 1), // LQ.x vf3, 1(vi0)
+                        sample.samePair
+                            ? makeVuUpper(0x28u, 0x8u, 2u, 3u, 4u) // ADD.x vf4, vf3, vf2
+                            : kVuUpperNop);
+                    writeVuInstructionPair(
+                        fixture->code, 8u,
+                        makeVuSq(0x8u, sample.samePair ? 4u : 3u, 0u, 2),
+                        sample.samePair
+                            ? kVuUpperNop
+                            : makeVuUpper(0x28u, 0x8u, 2u, 3u, 4u));
+                    writeVuInstructionPair(
+                        fixture->code, 16u, lowerNop, kVuUpperNop | 0x40000000u);
+                    writeVuInstructionPair(
+                        fixture->code, 24u, lowerNop, kVuUpperNop);
+                }
+
+                VU1Interpreter native;
+                std::memcpy(native.state().vf[2], vf2, sizeof vf2);
+                std::memcpy(native.state().vf[3], initialVf3, sizeof initialVf3);
+                native.execute(nativeFx.code, PS2_VU1_CODE_SIZE,
+                               nativeFx.data, PS2_VU1_DATA_SIZE,
+                               nativeFx.gs, &nativeFx.mem, 0u, 0u, 0u, 256u);
+                t.Equals(native.state().pc, 32u,
+                         "native execution should include the E-bit delay slot");
+                t.Equals(native.state().vf[3][0], 10.0f,
+                         "LQ must load VF3.x");
+                t.Equals(native.state().vf[4][0], sample.expectedAdd,
+                         "ADD must read the correct same-pair or dependent VF value");
+                float nativeStore[4]{};
+                readVuQword(nativeFx.data, 2u, nativeStore);
+                t.Equals(nativeStore[0], sample.expectedStore,
+                         "SQ must store the correct committed source VF component");
+
+                VU1State state{};
+                PS2Vu1Kzvu session(fx.mem, true);
+                kzvuSetVF(2, rawVf2);
+                kzvuSetVF(3, rawVf3);
+                t.IsTrue(PS2Vu1Kzvu::tryExecute(fx.mem, state, 0u, 0u, 0u, 256u),
+                         "KZVU should run the same LQ/SQ hazard program");
+                t.IsTrue(!state.budgetExhausted,
+                         "the LQ/SQ program should complete at its E-bit");
+                t.Equals(state.pc, native.state().pc,
+                         "KZVU and native should agree on the stop PC");
+
+                uint32_t referenceVf3[4]{};
+                uint32_t referenceVf4[4]{};
+                kzvuGetVF(3, referenceVf3);
+                kzvuGetVF(4, referenceVf4);
+                uint32_t nativeVf3x = 0u;
+                uint32_t nativeVf4x = 0u;
+                std::memcpy(&nativeVf3x, &native.state().vf[3][0], sizeof nativeVf3x);
+                std::memcpy(&nativeVf4x, &native.state().vf[4][0], sizeof nativeVf4x);
+                t.Equals(referenceVf3[0], nativeVf3x,
+                         "KZVU and native LQ result bits should match");
+                t.Equals(referenceVf4[0], nativeVf4x,
+                         "KZVU and native dependent ADD result bits should match");
+                float referenceStore[4]{};
+                readVuQword(fx.data, 2u, referenceStore);
+                t.Equals(referenceStore[0], nativeStore[0],
+                         "KZVU and native SQ memory results should match");
+
+                std::cout << "[VU1 LQ/SQ hazard comparison] " << sample.name
+                          << " native_cycles=" << native.state().cycles
+                          << " kzvu_cycles=" << state.cycles
+                          << " delta=" << static_cast<int64_t>(state.cycles) -
+                                         static_cast<int64_t>(native.state().cycles)
+                          << '\n';
+                // Internal cycle parity remains observational.
+            }
+        });
+
         tc.Run("kzvu FDIV and EFU results survive E-bit and MSCNT", [](TestCase &t)
         {
             struct ScalarCase
