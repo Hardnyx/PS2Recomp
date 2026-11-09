@@ -103,6 +103,8 @@ void PS2Vu1Kzvu::execute(VU1State &state, std::optional<uint32_t> startPc,
             state.cycles = 0u;
         auto *const data = m_memory.getVU1Data();
         std::memcpy(kzvuDataMem(), data, PS2_VU1_DATA_SIZE);
+        state.top = top & 0x3FFu;
+        state.itop = itop & 0x3FFu;
         kzvuSetTop(top, itop);
         kzvuSetFBRST((state.dBitEnabled ? 1u << 10 : 0u) |
                      (state.tBitEnabled ? 1u << 11 : 0u));
@@ -115,6 +117,12 @@ void PS2Vu1Kzvu::execute(VU1State &state, std::optional<uint32_t> startPc,
                         : kzvuExecute(startPc.value_or(0xffffffffu), maxCycles);
     state.pc = kzvuGetVI(kKzvuTPC) * 8u;
     state.budgetExhausted = kzvuRunning();
+    // Mirror the committed VI registers at every slice boundary, including
+    // E-bit completion and MSCNT. The reference interpreter retains its own
+    // in-flight writes; reading this snapshot does not modify their timing.
+    state.vi[0] = 0;
+    for (uint32_t reg = 1u; reg < 16u; ++reg)
+        state.vi[reg] = static_cast<int16_t>(kzvuGetVI(reg));
 
     // Keep VU data stores visible at every slice boundary. Do not reload this
     // buffer on a continuation: KZVU still owns the in-flight program state.
