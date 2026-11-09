@@ -267,6 +267,17 @@ relying on a permissive scheduler default. TekkenTagPort commit
 `20fc089` pins this candidate in
 [Windows run 42707197853](https://github.com/Hardnyx/TekkenTagPort/actions/runs/42707197853).
 
+Subsequent candidate `da8de7a` corrects 8- and 16-bit MMIO stores to
+`INTC_STAT`, `INTC_MASK` and `D_STAT`. These registers use write-one
+strobes, so a narrow write must pass only the addressed byte/halfword
+bits to the register handler. Previously the generic read/merge/write
+path could acknowledge unrelated pending sources or toggle unrelated
+masks. The new regression covers selective byte acknowledgement,
+halfword mask toggling, the reserved high INTC halfword and a DMAC
+status-mask preservation case. The port pins this candidate in commit
+`caae86f` for
+[Windows run 42707856115](https://github.com/Hardnyx/TekkenTagPort/actions/runs/42707856115).
+
 This is the synchronous scheduler's delivery gate, not a full EE
 interrupt CPU model. A status bit already latched while masked does not
 yet schedule a new handler solely because the guest unmasks it;
