@@ -111,6 +111,33 @@ figures support a real terminal pipeline-completion requirement, but do not
 by themselves establish the exact one-cycle delta in these tests. See the
 [manual](https://www.manuallib.com/download/pdf0/VU-USER-MANUAL.PDF).
 
+## Bounded VU1 execution and MSCNT
+
+The adapter now distinguishes a completed microprogram from a cycle-budget
+boundary with `VU1State::budgetExhausted`. Native execution retains its
+instruction PC and in-flight pipelines; the reference backend uses
+`kzvuContinue()` when its previous execution is still running. Calling
+`kzvuExecute()` on that path would finish the previous program before
+starting another and defeat the requested slice budget.
+
+The synchronous VIF1 MSCAL/MSCNT integration continues in 65,536-cycle slices,
+with a maximum of 1,048,576 allocated cycles before reporting an error.
+This is a bounded, synchronous compatibility path, not EE/VU overlap or
+cycle-accurate concurrency. VU data writes are copied at reference-backend
+slice boundaries without overwriting its in-flight state.
+
+Candidate `4b8f4f9` passed [Windows run 42577229400](https://github.com/Hardnyx/TekkenTagPort/actions/runs/42577229400):
+453/453 default tests and 456/456 optional-backend tests. The regressions
+cover native and reference MSCNT state retention, E-bit delay-slot PC,
+one-cycle budget slices, and completion of a pending FMAC output.
+These tests do not establish a hardware timing rule for simultaneous EE,
+VIF1 and VU1 execution.
+
+A subsequent scalar-characterization test at `d5efa4b` examines FDIV Q
+and EFU P across E-bit termination and an explicit WAITQ/WAITP program
+started by MSCNT. Its CI result is not part of the validated
+`4b8f4f9` checkpoint.
+
 ## Windows regression commands
 
 Run from the fork root in an initialized MSVC x64 tools environment. These
@@ -145,24 +172,24 @@ At cycle-test candidate `ed06c15`, GitHub Actions run `42572369030` passed
 452 default tests and 454 optional-backend tests, including the 17-case
 cycle-characterization matrix. D/T interrupt candidate `946dd03` passed
 Windows run `42574393855`: 453/453 default and 455/455 optional tests.
-TekkenTagPort repository checks passed in run `42574954782`. Counts refer
-to exact tested revisions and should not be carried forward without rerunning
-CI. These results do not substitute for live gameplay validation or a
-physical-hardware timing capture.
+The resumable-budget candidate `4b8f4f9` passed run `42577229400`:
+453/453 default and 456/456 optional tests. Counts refer to exact tested
+revisions and should not be carried forward without rerunning CI. These
+results do not substitute for live gameplay validation or a physical-hardware
+timing capture.
 
 The port's visible matrix controls remove matched long fighter streaks and reach
 short combat intervals on additional teams. Mesh, fog/lighting and texture errors
 remain; a complete correctly timed fight is not verified. Performance comparisons
 also retain substantial wall-time variability.
 
-Next fork work must follow a demonstrated runtime discrepancy: add
-cross-backend MSCNT continuation and budget-exhaustion tests, characterize
-FDIV/EFU terminal completion, and audit LQ/SQ hazard classification against
-the VU manual. The scheduler test does not model raw INTC_STAT/INTC_MASK
-registers. Keep the built-in interpreter as the default; do not promote a JIT
-or timing change based only on synthetic parity. Update this inventory when
-accepting another runtime change; update the port checkpoint with its
-integration decision and visible evidence.
+Next fork work must follow a demonstrated runtime discrepancy: validate
+FDIV/EFU completion at the E-bit boundary, compare LQ/SQ register hazards
+and same-pair overlap, and test how VU busy state, DMA and VIF1 progress
+are exposed to the EE. The scheduler test does not model raw
+INTC_STAT/INTC_MASK registers. Keep the built-in interpreter as the
+default; do not promote a JIT or timing change based only on synthetic
+parity. Update the port checkpoint with the integration decision and evidence.
 
 Do not commit the ISO, ELF, proprietary IRX, BIOS, generated game C++, memory
 captures, compiled game runners or private launchers. Preserve dependency notices
