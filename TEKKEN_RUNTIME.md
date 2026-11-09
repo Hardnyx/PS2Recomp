@@ -18,11 +18,15 @@ GS/VU0 adapters and visible game controls live in
 [TekkenTagPort](https://github.com/Hardnyx/TekkenTagPort).
 
 The port's [dependency manifest](https://github.com/Hardnyx/TekkenTagPort/blob/main/config/dependencies.json)
-pins `97519ea4bb710e197e15962c02e1450eae53dddf` at this checkpoint. Later commits on `main` are not automatically installed by the port, and publishing
-`main` does not replace an existing patched runtime checkout. Some corrections,
-including SDK matrix arithmetic, also have reversible port installers for those
-existing checkouts. Do not apply such patches twice or discard local integration
-files to reconcile different source revisions.
+pins `97519ea4bb710e197e15962c02e1450eae53dddf` at this checkpoint.
+Fork `main` is 18 commits ahead of that pin. The six reusable runtime changes
+through `175f843` have been reviewed separately; later commits add tests,
+documentation and the current D/T interrupt candidate. None of those later
+commits is installed automatically by the port, and publishing `main` does
+not replace an existing patched runtime checkout. Some corrections, including
+SDK matrix arithmetic, also have reversible port installers for those existing
+checkouts. Do not apply such patches twice or discard local integration files
+to reconcile different source revisions.
 
 The project-wide [development plan](https://github.com/Hardnyx/TekkenTagPort/blob/main/docs/development-plan.md)
 and [current checkpoint](https://github.com/Hardnyx/TekkenTagPort/blob/main/docs/development-checkpoint.md)
@@ -47,6 +51,8 @@ changed contracts; they do not certify every game or full Tekken compatibility.
 | EFU arithmetic | Correct the EATAN coefficient and reduce inputs before polynomial evaluation | `1e0ab41`, `396899e` |
 | Scheduler | Skip pending-event scans when no work or deadline requires them, preserving deferred preemption | `dc70c62` |
 | SDK matrix arithmetic | Use PS2 multiply/add semantics so exponent-255 values do not contaminate zero-weighted matrix components | `175f843` |
+| VU1 cycle characterization | Add 17 synthetic cases for terminal-drain timing across NOP, IADDIU, LQ and ADD | `33ded8c`, `3909c55`, `ed06c15` |
+| VU1 D/T interrupt candidate | Consume KZVU's VU1 interrupt latch and dispatch EE INTC cause 7 through the scheduler | `a65079b`, `597d0f6`; test guard `946dd03` (CI pending) |
 
 Translator changes require regenerating affected local guest sources; relinking
 old generated code does not change their address semantics. Runtime-only changes
@@ -65,12 +71,37 @@ session through the existing runtime interface; they must not create a competing
 owner or reuse it from another thread. The adapter transports VIF starts,
 continuations, memory and ordered PATH1 output through the runtime boundary.
 
+The current D/T interrupt candidate also consumes KZVU's pending VU1 interrupt
+with `kzvuTakeInterrupt()` and forwards it as EE INTC cause 7 through the
+scheduler. Its integration regression exercises VIF1 MSCAL with D-bit and
+T-bit stops enabled, plus a disabled-D control. The candidate is pinned in
+TekkenTagPort CI at `946dd03`; do not treat it as accepted until both backend
+jobs pass.
+
 This public option selects the reference interpreter. It does not enable the
 port's private dual-microVU-JIT experiments. Those CPU experiments use separate
 precision and flag controls and still have unresolved cycle-accounting differences.
 Their faster bounded game runs are not the fork's default behavior or a stable
 60 Hz claim. See the port's
 [vector qualification report](https://github.com/Hardnyx/TekkenTagPort/blob/main/docs/combat-vector-controls.md).
+
+## VU1 cycle-accounting characterization
+
+The 17-case regression at `ed06c15` compares the native interpreter with the
+pinned KZVU/PCSX2 reference path. It covers NOP and IADDIU controls plus LQ and
+ADD vector writes in four-pair and six-pair E-bit programs. The six-pair cases
+issue at PCs 0, 8 and 16 to bracket the four-cycle writeback boundary.
+
+GitHub Actions run `42572369030` passed 452/452 default tests and 454/454
+optional-backend tests. The controls match. LQ and ADD show a one-cycle delta
+only when the four-cycle writeback remains pending at terminal drain: in the
+six-pair program, issue at PC 0 or 8 matches, while issue at PC 16 differs by
+one cycle. The four-pair early and late cases also differ by one cycle.
+
+This isolates an internal terminal-drain convention difference; it does not
+prove which implementation matches physical hardware or that the delta is
+guest-visible. Do not subtract a fixed cycle or promote a timing change without
+an independent hardware or guest-observable contract.
 
 ## Windows regression commands
 
@@ -81,7 +112,7 @@ code or BIOS. CMake may fetch build dependencies on a fresh setup.
 Default backend, using NMake:
 
 ```powershell
-cmake -S . -B out/fork-default -G "NMake Makefiles" -DCMAKE_BUILD_TYPE=RelWithDebInfo -DPS2X_BUILD_STUDIO=OFF -DPS2X_ENABLE_KZVU_VU1=OFF
+cmake -S . -B out/fork-default -G "NMake Makefiles" -DCMAKE_BUILD_TYPE=RelWithDebInfo -DPS2X_BUILD_STUDIO=OFF -DPS2X_ENABLE_FFMPEG=OFF -DPS2X_ENABLE_KZVU_VU1=OFF
 cmake --build out/fork-default --target ps2x_tests
 .\out\fork-default\ps2xTest\ps2x_tests.exe
 ```
@@ -92,7 +123,7 @@ local source paths. The compared adapter sources are KillzoneRecomp
 `646df006a4688063e56c0826e7ea4b8bb0c112c4`.
 
 ```powershell
-cmake -S . -B out/fork-kzvu -G "NMake Makefiles" -DCMAKE_BUILD_TYPE=RelWithDebInfo -DPS2X_BUILD_STUDIO=OFF -DPS2X_ENABLE_KZVU_VU1=ON -DPS2X_KZVU_SOURCE_DIR="C:/sources/KillzoneRecomp/ext/kzvu" -DKZVU_PCSX2_DIR="C:/sources/pcsx2" -DKZVU_BUILD_TEST=OFF
+cmake -S . -B out/fork-kzvu -G "NMake Makefiles" -DCMAKE_BUILD_TYPE=RelWithDebInfo -DPS2X_BUILD_STUDIO=OFF -DPS2X_ENABLE_FFMPEG=OFF -DPS2X_ENABLE_KZVU_VU1=ON -DPS2X_KZVU_SOURCE_DIR="C:/sources/KillzoneRecomp/ext/kzvu" -DKZVU_PCSX2_DIR="C:/sources/pcsx2" -DKZVU_BUILD_TEST=OFF
 cmake --build out/fork-kzvu --target ps2x_tests
 .\out\fork-kzvu\ps2xTest\ps2x_tests.exe
 ```
@@ -102,10 +133,12 @@ examples, not installed dependencies or implicit revision updates.
 
 ## Verified checkpoint and remaining work
 
-At code commit `175f843`, the default configuration passes 451 tests and the
-optional-backend configuration passes 452. The two new SDK matrix regressions
-fail before that arithmetic fix. Test counts describe this revision; future
-changes may add tests. These local results do not substitute for CI or live
+At test candidate `ed06c15`, GitHub Actions run `42572369030` passed
+452 default tests and 454 optional-backend tests, including the 17-case
+cycle-characterization matrix. The current D/T interrupt candidate is
+`946dd03`; its Windows default/optional run `42574393855` is still pending.
+Counts refer to the exact tested revisions and should not be carried forward
+without rerunning CI. Neither result substitutes for physical-hardware or live
 gameplay validation.
 
 The port's visible matrix controls remove matched long fighter streaks and reach
@@ -113,12 +146,13 @@ short combat intervals on additional teams. Mesh, fog/lighting and texture error
 remain; a complete correctly timed fight is not verified. Performance comparisons
 also retain substantial wall-time variability.
 
-Next fork work must follow a demonstrated runtime discrepancy: resolve the VU
-cycle contract before JIT promotion, attribute residual EE/clock/IOP cost before
-another optimization, and add independent synthetic regressions for confirmed
-arithmetic or transport defects. Keep one material change per control and retain
-working defaults. Update this inventory when accepting another runtime change;
-update the port checkpoint with its integration decision and visible evidence.
+Next fork work must follow a demonstrated runtime discrepancy: finish D/T
+interrupt validation, add independent MSCNT and budget-exhaustion controls,
+then assess EE/VIF consequences and the physical-hardware timing contract.
+Keep the built-in interpreter as the default. Do not promote a JIT or timing
+change based only on synthetic parity. Update this inventory when accepting
+another runtime change; update the port checkpoint with its integration
+decision and visible evidence.
 
 Do not commit the ISO, ELF, proprietary IRX, BIOS, generated game C++, memory
 captures, compiled game runners or private launchers. Preserve dependency notices
