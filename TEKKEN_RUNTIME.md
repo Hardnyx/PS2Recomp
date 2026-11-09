@@ -222,6 +222,29 @@ programs; [run 42681060581](https://github.com/Hardnyx/TekkenTagPort/actions/run
 is pending. Neither test validates asynchronous EE/VU execution, raw DMA
 stall flags, or physical-hardware timing.
 
+## EE interrupt register semantics
+
+Fork candidate `d83d2d4` implements two guest-visible INTC register rules:
+`INTC_STAT` (`0x1000F000`) acknowledges pending sources on write-one,
+and `INTC_MASK` (`0x1000F010`) toggles its low sixteen mask bits on
+write-one. Sources latch independently of the mask. The native VU1 D/T
+stop path now sets INTC_STAT cause 7 before preserving the existing EE
+scheduler-handler dispatch. A PS2Memory regression covers independent
+pending causes, selective acknowledgement, repeated mask toggles and
+reserved high bits; the runtime VU1 interrupt regression checks the
+enabled/disabled D/T cases and guest acknowledgement.
+
+The register behavior follows the fixed PCSX2 reference source
+`pcsx2/HwWrite.cpp` at `646df006a4688063e56c0826e7ea4b8bb0c112c4`.
+The candidate is submitted to the port's exact-revision Windows workflow
+[run 42694902358](https://github.com/Hardnyx/TekkenTagPort/actions/runs/42694902358).
+
+This does not connect raw INTC_MASK to registered-handler delivery,
+implement generic INTC source latching for all other scheduler events,
+or establish asynchronous VIF1/VU1 timing. The default handler path
+continues to use the scheduler's syscall-level cause mask. Do not
+treat the MMIO test as full interrupt-controller compatibility.
+
 ## Windows regression commands
 
 Run from the fork root in an initialized MSVC x64 tools environment. These
@@ -271,8 +294,9 @@ also retain substantial wall-time variability.
 Next fork work must follow a demonstrated runtime discrepancy: validate
 FDIV/EFU completion at the E-bit boundary, compare LQ/SQ register hazards
 and same-pair overlap, and test how VU busy state, DMA and VIF1 progress
-are exposed to the EE. The scheduler test does not model raw
-INTC_STAT/INTC_MASK registers. Keep the built-in interpreter as the
+are exposed to the EE. Raw INTC_STAT acknowledgment,
+mask toggling and VU1 status latching now have bounded tests, but the
+raw mask is not wired to scheduler handler delivery. Keep the built-in interpreter as the
 default; do not promote a JIT or timing change based only on synthetic
 parity. Update the port checkpoint with the integration decision and evidence.
 
