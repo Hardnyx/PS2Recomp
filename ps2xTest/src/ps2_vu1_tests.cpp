@@ -460,6 +460,91 @@ void register_ps2_vu1_tests()
                      "The session should release the VU1 backend");
         });
 
+        tc.Run("kzvu publishes vector and scalar registers at slice boundaries", [](TestCase &t)
+        {
+            Vu1Fixture fx;
+            t.IsTrue(fx.initialize(), "VU1 fixture should initialize");
+            if (!fx.code || !fx.data)
+                return;
+
+            constexpr uint32_t lowerNop = 0x8000033cu;
+            writeVuInstructionPair(
+                fx.code, 0u, lowerNop,
+                makeVuUpper(0x28u, 0x8u, 2u, 1u, 3u)); // ADD.x vf3, vf1, vf2
+            writeVuInstructionPair(
+                fx.code, 8u, lowerNop, kVuUpperNop | 0x40000000u); // E-bit
+            writeVuInstructionPair(fx.code, 16u, lowerNop, kVuUpperNop);
+
+            VU1State state{};
+            PS2Vu1Kzvu session(fx.mem, true);
+
+            const float first[4] = {1.25f, 2.0f, 3.0f, 4.0f};
+            const float second[4] = {3.5f, 5.0f, 6.0f, 7.0f};
+            const float acc[4] = {8.0f, 9.0f, 10.0f, 11.0f};
+            uint32_t bits[4]{};
+            std::memcpy(bits, first, sizeof(bits));
+            kzvuSetVF(1, bits);
+            std::memcpy(bits, second, sizeof(bits));
+            kzvuSetVF(2, bits);
+            std::memcpy(bits, acc, sizeof(bits));
+            kzvuSetACC(bits);
+            kzvuSetVI(kKzvuI, 0x3F400000u); // 0.75f
+            kzvuSetVI(kKzvuQ, 0x40E00000u); // 7.0f
+            kzvuSetVI(kKzvuP, 0x41000000u); // 8.0f
+            kzvuSetVI(kKzvuR, 0x3F812345u);
+
+            const auto checkSnapshot = [&]
+            {
+                for (int reg = 0; reg < 32; ++reg)
+                {
+                    uint32_t expected[4]{};
+                    uint32_t actual[4]{};
+                    kzvuGetVF(reg, expected);
+                    std::memcpy(actual, state.vf[reg], sizeof(actual));
+                    for (int lane = 0; lane < 4; ++lane)
+                        t.Equals(actual[lane], expected[lane],
+                                 "public VF snapshot should retain raw reference bits");
+                }
+
+                uint32_t expectedAcc[4]{};
+                uint32_t actualAcc[4]{};
+                kzvuGetACC(expectedAcc);
+                std::memcpy(actualAcc, state.acc, sizeof(actualAcc));
+                for (int lane = 0; lane < 4; ++lane)
+                    t.Equals(actualAcc[lane], expectedAcc[lane],
+                             "public ACC snapshot should retain raw reference bits");
+
+                t.Equals(state.status, kzvuGetVI(kKzvuStatus), "public STATUS snapshot");
+                t.Equals(state.mac, kzvuGetVI(kKzvuMac), "public MAC snapshot");
+                t.Equals(state.clip, kzvuGetVI(kKzvuClip), "public CLIP snapshot");
+                t.Equals(state.r, kzvuGetVI(kKzvuR), "public R snapshot");
+                uint32_t scalarBits = 0u;
+                std::memcpy(&scalarBits, &state.i, sizeof(scalarBits));
+                t.Equals(scalarBits, kzvuGetVI(kKzvuI), "public I snapshot");
+                std::memcpy(&scalarBits, &state.q, sizeof(scalarBits));
+                t.Equals(scalarBits, kzvuGetVI(kKzvuQ), "public Q snapshot");
+                std::memcpy(&scalarBits, &state.p, sizeof(scalarBits));
+                t.Equals(scalarBits, kzvuGetVI(kKzvuP), "public P snapshot");
+            };
+
+            t.IsTrue(PS2Vu1Kzvu::tryExecute(fx.mem, state, 0u, 0u, 0u, 1u),
+                     "first one-cycle slice should execute");
+            t.IsTrue(state.budgetExhausted, "first slice should retain pending execution");
+            checkSnapshot();
+
+            t.IsTrue(PS2Vu1Kzvu::tryExecute(fx.mem, state, std::nullopt, 0u, 0u, 1u),
+                     "second one-cycle slice should resume");
+            t.IsTrue(state.budgetExhausted, "E-bit should retain its delay slot");
+            checkSnapshot();
+
+            t.IsTrue(PS2Vu1Kzvu::tryExecute(fx.mem, state, std::nullopt, 0u, 0u, 1u),
+                     "final one-cycle slice should execute");
+            t.IsTrue(!state.budgetExhausted, "E-bit delay slot should complete");
+            checkSnapshot();
+            t.Equals(state.vf[3][0], 4.75f,
+                     "completed ADD result should be visible in public VU1 state");
+        });
+
         tc.Run("kzvu budget slices resume pending FMAC writes", [](TestCase &t)
         {
             Vu1Fixture fx;

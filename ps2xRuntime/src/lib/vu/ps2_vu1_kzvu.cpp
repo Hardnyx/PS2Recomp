@@ -124,6 +124,33 @@ void PS2Vu1Kzvu::execute(VU1State &state, std::optional<uint32_t> startPc,
     for (uint32_t reg = 1u; reg < 16u; ++reg)
         state.vi[reg] = static_cast<int16_t>(kzvuGetVI(reg));
 
+    // Expose the committed reference-backend registers through the same VU1State
+    // contract used by the native interpreter. These reads do not drain pending
+    // operations or replace KZVU's privately owned pipeline state.
+    uint32_t vectorBits[4]{};
+    for (uint32_t reg = 0u; reg < 32u; ++reg)
+    {
+        kzvuGetVF(static_cast<int>(reg), vectorBits);
+        std::memcpy(state.vf[reg], vectorBits, sizeof(vectorBits));
+    }
+    kzvuGetACC(vectorBits);
+    std::memcpy(state.acc, vectorBits, sizeof(vectorBits));
+    state.status = kzvuGetVI(kKzvuStatus);
+    state.mac = kzvuGetVI(kKzvuMac);
+    state.clip = kzvuGetVI(kKzvuClip);
+    state.r = kzvuGetVI(kKzvuR);
+
+    const auto readScalar = [](int index)
+    {
+        const uint32_t bits = kzvuGetVI(index);
+        float value;
+        std::memcpy(&value, &bits, sizeof(value));
+        return value;
+    };
+    state.i = readScalar(kKzvuI);
+    state.q = readScalar(kKzvuQ);
+    state.p = readScalar(kKzvuP);
+
     // Keep VU data stores visible at every slice boundary. Do not reload this
     // buffer on a continuation: KZVU still owns the in-flight program state.
     auto *const data = m_memory.getVU1Data();
