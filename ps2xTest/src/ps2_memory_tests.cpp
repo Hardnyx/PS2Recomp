@@ -1473,6 +1473,123 @@ void register_ps2_memory_tests()
             t.IsTrue(ct32Ok, "all CT32 pixels should survive a preceding paletted upload in the same GIF DMA chain");
         });
 
+        tc.Run("VIF1 DMA microprogram and FLUSH barriers precede channel completion", [](TestCase &t)
+        {
+            PS2Memory mem;
+            t.IsTrue(mem.initialize(), "VIF1 DMA ordering fixture should initialize");
+
+            constexpr uint32_t kVif1Channel = 0x10009000u;
+            constexpr uint32_t kDStat = 0x1000E010u;
+            constexpr uint32_t kSource = 0x00023800u;
+            constexpr uint32_t commands[] = {
+                0x03000005u, // BASE 5
+                0x02000003u, // OFFSET 3
+                0x04000007u, // ITOP 7
+                0x14000000u, // MSCAL 0
+                0x10000000u, // FLUSHE
+                0x11000000u, // FLUSH
+                0x13000000u, // FLUSHA
+                0x17000000u, // MSCNT
+            };
+            static_assert(sizeof(commands) == 2u * 16u);
+
+            std::memcpy(mem.getRDRAM() + kSource, commands, sizeof(commands));
+            struct VifDispatch
+            {
+                uint32_t command;
+                uint32_t startPc;
+                uint32_t top;
+                uint32_t itop;
+                uint32_t tops;
+                uint32_t dbf;
+                bool dmaActive;
+                bool dmaCompletionPending;
+            };
+            std::vector<VifDispatch> dispatches;
+            const auto snapshot = [&](uint32_t command, uint32_t startPc,
+                                      uint32_t top, uint32_t itop)
+            {
+                dispatches.push_back({
+                    command, startPc, top, itop,
+                    mem.vif1_regs.tops,
+                    (mem.vif1_regs.stat >> 7u) & 1u,
+                    (mem.readIORegister(kVif1Channel) & 0x100u) != 0u,
+                    (mem.readIORegister(kDStat) & (1u << 1u)) != 0u
+                });
+            };
+            mem.setVu1MscalCallback([&](uint32_t startPc, uint32_t top, uint32_t itop)
+            {
+                snapshot(0x14000000u, startPc, top, itop);
+            });
+            mem.setVu1MscntCallback([&](uint32_t top, uint32_t itop)
+            {
+                snapshot(0x17000000u, 0xFFFFFFFFu, top, itop);
+            });
+
+            t.IsTrue(mem.writeIORegister(kVif1Channel + 0x10u, kSource),
+                     "VIF1 MADR should accept the source");
+            t.IsTrue(mem.writeIORegister(kVif1Channel + 0x20u, 2u),
+                     "VIF1 QWC should accept both command qwords");
+            t.IsTrue(mem.writeIORegister(kVif1Channel, 0x100u),
+                     "VIF1 CHCR should start a normal DMA");
+            t.Equals(dispatches.size(), static_cast<size_t>(0u),
+                     "VU1 callbacks must not run before DMA is processed");
+            t.Equals(mem.readIORegister(kDStat) & (1u << 1u), 0u,
+                     "the channel must not signal completion before processing");
+
+            mem.processPendingTransfers();
+
+            t.Equals(dispatches.size(), static_cast<size_t>(2u),
+                     "MSCAL and MSCNT must dispatch exactly once each across FLUSH barriers");
+            if (dispatches.size() == 2u)
+            {
+                const VifDispatch &first = dispatches[0];
+                const VifDispatch &second = dispatches[1];
+                t.Equals(first.command, 0x14000000u,
+                         "the initial VU1 callback must be MSCAL");
+                t.Equals(first.startPc, 0u, "MSCAL should start at code address zero");
+                t.Equals(first.top, 5u, "MSCAL should see BASE as TOP");
+                t.Equals(first.itop, 7u, "MSCAL should receive ITOPS");
+                t.Equals(first.tops, 8u, "MSCAL should advance TOPS to BASE + OFFSET");
+                t.Equals(first.dbf, 1u, "MSCAL should enter the alternate buffer");
+                t.IsTrue(first.dmaActive, "DMA should remain active inside MSCAL");
+                t.IsFalse(first.dmaCompletionPending,
+                          "DMA must not complete before the MSCAL callback returns");
+
+                t.Equals(second.command, 0x17000000u,
+                         "the resumed callback must be MSCNT after three barriers");
+                t.Equals(second.top, 8u, "MSCNT should see the second buffer");
+                t.Equals(second.itop, 7u, "MSCNT must preserve ITOP");
+                t.Equals(second.tops, 5u, "MSCNT should rotate TOPS back to BASE");
+                t.Equals(second.dbf, 0u, "MSCNT should restore the original buffer");
+                t.IsTrue(second.dmaActive, "DMA should remain active inside MSCNT");
+                t.IsFalse(second.dmaCompletionPending,
+                          "DMA must not complete before MSCNT returns");
+            }
+
+            t.Equals(mem.vif1_regs.top, 8u, "the final VIF1 TOP should be the MSCNT buffer");
+            t.Equals(mem.vif1_regs.itop, 7u, "the final VIF1 ITOP should remain latched");
+            t.Equals(mem.vif1_regs.tops, 5u, "TOPS should return to the first buffer");
+            t.Equals(mem.vif1_regs.stat & (1u << 7u), 0u,
+                     "the final DBF should select the first buffer");
+            t.Equals(mem.readIORegister(kVif1Channel) & 0x100u, 0u,
+                     "DMA STR should clear after the command stream drains");
+            t.Equals(mem.readIORegister(kVif1Channel + 0x20u), 0u,
+                     "DMA QWC should be zero after completion");
+            t.IsTrue((mem.readIORegister(kDStat) & (1u << 1u)) != 0u,
+                     "VIF1 DMA completion should latch the channel status");
+            const std::vector<uint32_t> completed = mem.consumeCompletedDmacCauses();
+            t.Equals(completed.size(), static_cast<size_t>(1u),
+                     "the VIF1 DMA must report one completion");
+            if (!completed.empty())
+                t.Equals(completed.front(), 1u, "the completed DMAC channel must be VIF1");
+            mem.processPendingTransfers();
+            t.Equals(dispatches.size(), static_cast<size_t>(2u),
+                     "polling again must not replay completed VU1 callbacks");
+            t.IsTrue(mem.consumeCompletedDmacCauses().empty(),
+                     "polling again must not requeue the completed DMAC interrupt");
+        });
+
         tc.Run("VIF1 DMA DIRECT forwards payload to GIF callback and clears channel", [](TestCase &t)
         {
             PS2Memory mem;
