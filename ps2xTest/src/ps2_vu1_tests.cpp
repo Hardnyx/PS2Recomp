@@ -445,7 +445,7 @@ void register_ps2_vu1_tests()
                           << " kzvu=" << state.cycles
                           << " delta=" << static_cast<int64_t>(state.cycles) -
                                              static_cast<int64_t>(nativeFinalCycles)
-                          << '\\n';
+                          << '\n';
                 t.Equals(kzvuGetVI(1u), static_cast<uint32_t>(native.state().vi[1]),
                          "MSCNT should preserve VI state across the backend boundary");
                 uint32_t value = 0;
@@ -508,6 +508,108 @@ void register_ps2_vu1_tests()
             std::memcpy(&result, &actual[0], sizeof(result));
             t.Equals(result, 11.0f,
                      "The pending FMAC result should be committed before completion");
+        });
+
+        tc.Run("kzvu FDIV and EFU results survive E-bit and MSCNT", [](TestCase &t)
+        {
+            struct ScalarCase
+            {
+                const char *name;
+                bool efu;
+                float expected;
+            };
+            constexpr ScalarCase cases[] = {
+                {"FDIV Q", false, 6.0f},
+                {"EFU ESADD P", true, 14.0f},
+            };
+            constexpr uint32_t lowerNop = 0x8000033Cu;
+            constexpr uint32_t end = kVuUpperNop | 0x40000000u;
+            const float source1[4] = {18.0f, 2.0f, 3.0f, 0.0f};
+            const float source2[4] = {3.0f, 0.0f, 0.0f, 0.0f};
+            uint32_t raw1[4]{};
+            uint32_t raw2[4]{};
+            std::memcpy(raw1, source1, sizeof raw1);
+            std::memcpy(raw2, source2, sizeof raw2);
+
+            for (const ScalarCase &sample : cases)
+            {
+                Vu1Fixture fx;
+                Vu1Fixture nativeFx;
+                t.IsTrue(fx.initialize(), "KZVU scalar fixture should initialize");
+                t.IsTrue(nativeFx.initialize(), "native scalar fixture should initialize");
+                if (!fx.code || !nativeFx.code)
+                    continue;
+
+                const uint32_t scalarOp = sample.efu
+                    ? makeVuLowerSpecial(0x70u, 1u) // ESADD P, vf1
+                    : makeVuDiv(1u, 2u, 0u, 0u);   // DIV Q, vf1.x, vf2.x
+                const uint32_t waitOp = makeVuLowerSpecial(
+                    sample.efu ? 0x7Bu : 0x3Bu, 0u); // WAITP / WAITQ
+                for (Vu1Fixture *fixture : {&fx, &nativeFx})
+                {
+                    writeVuInstructionPair(fixture->code, 0u, scalarOp, kVuUpperNop);
+                    writeVuInstructionPair(fixture->code, 8u, lowerNop, end);
+                    writeVuInstructionPair(fixture->code, 16u, lowerNop, kVuUpperNop);
+                    writeVuInstructionPair(fixture->code, 24u, waitOp, end);
+                    writeVuInstructionPair(fixture->code, 32u, lowerNop, kVuUpperNop);
+                }
+
+                VU1Interpreter native;
+                std::memcpy(native.state().vf[1], source1, sizeof source1);
+                std::memcpy(native.state().vf[2], source2, sizeof source2);
+                native.execute(nativeFx.code, PS2_VU1_CODE_SIZE,
+                               nativeFx.data, PS2_VU1_DATA_SIZE, nativeFx.gs,
+                               &nativeFx.mem, 0u, 0u, 0u, 256u);
+                t.Equals(native.state().pc, 24u,
+                         "native E-bit stop should leave TPC at the following program");
+                const float nativeBefore = sample.efu ? native.state().p : native.state().q;
+                const uint64_t nativeFirstCycles = native.state().cycles;
+                native.resume(nativeFx.code, PS2_VU1_CODE_SIZE,
+                              nativeFx.data, PS2_VU1_DATA_SIZE, nativeFx.gs,
+                              &nativeFx.mem, 0u, 0u, 256u);
+                t.Equals(native.state().pc, 40u,
+                         "native MSCNT should stop after WAIT and its delay slot");
+                const float nativeAfter = sample.efu ? native.state().p : native.state().q;
+                t.Equals(nativeAfter, sample.expected,
+                         "the native scalar output must be available after WAIT");
+
+                VU1State state{};
+                PS2Vu1Kzvu session(fx.mem, true);
+                kzvuSetVF(1, raw1);
+                kzvuSetVF(2, raw2);
+                const int scalarRegister = sample.efu ? kKzvuP : kKzvuQ;
+
+                t.IsTrue(PS2Vu1Kzvu::tryExecute(fx.mem, state, 0u, 0u, 0u, 256u),
+                         "KZVU should execute the first scalar program");
+                t.IsTrue(!state.budgetExhausted,
+                         "KZVU should terminate the first program at its E-bit");
+                t.Equals(state.pc, 24u,
+                         "KZVU E-bit stop should leave TPC at the following program");
+                const uint32_t referenceBefore = kzvuGetVI(scalarRegister);
+                const uint64_t referenceFirstCycles = state.cycles;
+
+                t.IsTrue(PS2Vu1Kzvu::tryExecute(fx.mem, state, std::nullopt, 0u, 0u, 256u),
+                         "KZVU should execute the WAIT program through MSCNT");
+                t.IsTrue(!state.budgetExhausted,
+                         "KZVU should terminate the WAIT program");
+                t.Equals(state.pc, 40u,
+                         "KZVU MSCNT should stop after WAIT and its delay slot");
+                const uint32_t referenceAfter = kzvuGetVI(scalarRegister);
+                uint32_t nativeBits = 0u;
+                std::memcpy(&nativeBits, &nativeAfter, sizeof nativeBits);
+                t.Equals(referenceAfter, nativeBits,
+                         "KZVU must expose the same scalar bits after WAIT and MSCNT");
+
+                std::cout << "[VU1 scalar terminal comparison] " << sample.name
+                          << " native_before=" << nativeBefore
+                          << " reference_before_bits=0x" << std::hex << referenceBefore
+                          << std::dec << " native_first_cycles=" << nativeFirstCycles
+                          << " kzvu_first_cycles=" << referenceFirstCycles
+                          << " native_total=" << native.state().cycles
+                          << " kzvu_total=" << state.cycles << '\n';
+                // First-stop Q/P visibility and cycles remain observational;
+                // only the explicit WAIT program establishes the final output.
+            }
         });
 #endif
         tc.Run("VU1 cycle budget slices preserve E-bit drain and guest state", [](TestCase &t)
