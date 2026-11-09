@@ -1,9 +1,12 @@
 ## PS2Recomp: PlayStation 2 Static Recompiler (Experimental)
 
-This is Hardnyx's `tekken-runtime` branch, maintained for TekkenTagPort. Read
-[Tekken runtime branch](TEKKEN_RUNTIME.md) for upstream provenance, the change
-inventory, test commands and integration limits. The upstream project overview
-and general usage follow below. The project-wide plan remains in
+This is Hardnyx's PS2Recomp fork, maintained for TekkenTagPort. `main` is
+the active source of truth for shared engine changes. Read
+[Tekken runtime integration notes](TEKKEN_RUNTIME.md) for upstream provenance,
+the change inventory, test commands and integration limits. The historical
+`tekken-runtime` ref is frozen at `70295a8` and is not used for new commits.
+The upstream project overview and general usage follow below. The project-wide
+plan remains in
 [TekkenTagPort](https://github.com/Hardnyx/TekkenTagPort/blob/main/docs/development-plan.md).
 
 [![Discord](https://img.shields.io/badge/Discord-Join%20Server-5865F2?logo=discord&logoColor=white)](https://discord.gg/JQ8mawxUEf)

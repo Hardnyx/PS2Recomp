@@ -1,11 +1,13 @@
-# Tekken runtime branch
+# Tekken runtime integration notes
 
-Updated 7 November 2026. This document describes `tekken-runtime` in
-[Hardnyx/PS2Recomp](https://github.com/Hardnyx/PS2Recomp/tree/tekken-runtime).
-The branch is based on upstream commit
+Updated 9 November 2026. This document describes `main` in
+[Hardnyx/PS2Recomp](https://github.com/Hardnyx/PS2Recomp/tree/main).
+The fork is based on upstream commit
 `e5636981a1c9de368f6b71e819c3dc188dfedbf4` from
 [ran-j/PS2Recomp](https://github.com/ran-j/PS2Recomp).
-The upstream license and notices remain in [LICENSE](LICENSE).
+The historical `tekken-runtime` ref remains frozen at `70295a878764252c47656eb4857b79bbc543095d`,
+an ancestor of `main`; it is not used for new work. The upstream license and
+notices remain in [LICENSE](LICENSE).
 
 ## Scope and integration
 
@@ -16,9 +18,8 @@ GS/VU0 adapters and visible game controls live in
 [TekkenTagPort](https://github.com/Hardnyx/TekkenTagPort).
 
 The port's [dependency manifest](https://github.com/Hardnyx/TekkenTagPort/blob/main/config/dependencies.json)
-pins `97519ea4bb710e197e15962c02e1450eae53dddf` at this checkpoint. Later commits
-on this branch are not automatically installed by the port, and publishing this
-branch does not replace an existing patched runtime checkout. Some corrections,
+pins `97519ea4bb710e197e15962c02e1450eae53dddf` at this checkpoint. Later commits on `main` are not automatically installed by the port, and publishing
+`main` does not replace an existing patched runtime checkout. Some corrections,
 including SDK matrix arithmetic, also have reversible port installers for those
 existing checkouts. Do not apply such patches twice or discard local integration
 files to reconcile different source revisions.
