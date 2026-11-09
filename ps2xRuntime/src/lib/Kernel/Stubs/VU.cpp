@@ -702,10 +702,10 @@ namespace ps2_stubs
         float m0[16]{}, m1[16]{}, out[16]{};
         if (readVuMatrix4f(rdram, m0Addr, m0) && readVuMatrix4f(rdram, m1Addr, m1))
         {
-            // out = m0 * m1 (first source . second source), matching the
-            // file's mulVuMatrix(lhs,rhs)=lhs.rhs convention and the RotMatrix
-            // / ViewScreenMatrix siblings (first operand on the left).
-            mulVuMatrix(m0, m1, out);
+            // SDK composition applies the second matrix before the first.
+            // ApplyMatrix(m0, ApplyMatrix(m1, v)) corresponds to m1*m0
+            // under the row-vector convention used by mulVuMatrix.
+            mulVuMatrix(m1, m0, out);
             (void)writeVuMatrix4f(rdram, dstAddr, out);
         }
         setReturnS32(ctx, 0);

@@ -421,7 +421,7 @@ void register_ps2_vu_tests()
             }
         });
 
-        tc.Run("MulMatrix_equals_arg1_times_arg2", [](TestCase &t)
+        tc.Run("MulMatrix_composes_arg2_before_arg1", [](TestCase &t)
         {
             VuEnv env;
             float m0[16] = {
@@ -442,9 +442,9 @@ void register_ps2_vu_tests()
                     float sum = 0.0f;
                     for (int k = 0; k < 4; ++k)
                     {
-                        // expected = mulVuMatrix(m0, m1) = m0 * m1 (arg1 * arg2);
-                        // mulVuMatrix is file-local to VU.cpp, so mirror its formula here.
-                        sum += m1[4 * k + j] * m0[4 * i + k];
+                        // The SDK composes arguments as m1*m0 (arg2 before arg1).
+                        // Mirror the file-local row-major multiply for this control.
+                        sum += m0[4 * k + j] * m1[4 * i + k];
                     }
                     expected[4 * i + j] = sum;
                 }
@@ -465,7 +465,96 @@ void register_ps2_vu_tests()
                     allMatch = false;
                 }
             }
-            t.IsTrue(allMatch, "MulMatrix(dst, m0, m1) should equal m0*m1 (mulVuMatrix(m0,m1), arg1*arg2)");
+            t.IsTrue(allMatch, "MulMatrix(dst, m0, m1) should compose as m1*m0");
+        });
+
+        tc.Run("MulMatrix_noncommuting_affine_composition", [](TestCase &t)
+        {
+            VuEnv env;
+            const float scale[16] = {
+                2, 0, 0, 0,
+                0, 3, 0, 0,
+                0, 0, 4, 0,
+                0, 0, 0, 1};
+            const float translate[16] = {
+                1, 0, 0, 0,
+                0, 1, 0, 0,
+                0, 0, 1, 0,
+                5, 7, 11, 1};
+            writeMat4(env, kA, scale);
+            writeMat4(env, kB, translate);
+            writeVec4(env, kC, 2.0f, -3.0f, 5.0f, 1.0f);
+
+            SET_GPR_U32(&env.ctx, 4, kOut);
+            SET_GPR_U32(&env.ctx, 5, kB);
+            SET_GPR_U32(&env.ctx, 6, kC);
+            ps2_stubs::sceVu0ApplyMatrix(env.rdram.data(), &env.ctx, &env.runtime);
+            SET_GPR_U32(&env.ctx, 4, kOut2);
+            SET_GPR_U32(&env.ctx, 5, kA);
+            SET_GPR_U32(&env.ctx, 6, kOut);
+            ps2_stubs::sceVu0ApplyMatrix(env.rdram.data(), &env.ctx, &env.runtime);
+
+            SET_GPR_U32(&env.ctx, 4, kDst);
+            SET_GPR_U32(&env.ctx, 5, kA);
+            SET_GPR_U32(&env.ctx, 6, kB);
+            ps2_stubs::sceVu0MulMatrix(env.rdram.data(), &env.ctx, &env.runtime);
+            float composed[16]{};
+            readMat4(env, kDst, composed);
+            t.IsTrue(nearlyEqual(composed[12], 10.0f) &&
+                         nearlyEqual(composed[13], 21.0f) &&
+                         nearlyEqual(composed[14], 44.0f),
+                     "Scale after translation should scale its translation components");
+
+            SET_GPR_U32(&env.ctx, 4, kDst2);
+            SET_GPR_U32(&env.ctx, 5, kDst);
+            SET_GPR_U32(&env.ctx, 6, kC);
+            ps2_stubs::sceVu0ApplyMatrix(env.rdram.data(), &env.ctx, &env.runtime);
+            float sequential[4]{};
+            float combined[4]{};
+            readVec4f(env, kOut2, sequential);
+            readVec4f(env, kDst2, combined);
+            for (uint32_t i = 0u; i < 4u; ++i)
+                t.IsTrue(nearlyEqual(combined[i], sequential[i]),
+                         "Composed matrix must equal two sequential ApplyMatrix calls");
+        });
+
+        tc.Run("MulMatrix_overlapping_output_keeps_composition", [](TestCase &t)
+        {
+            VuEnv env;
+            const float scale[16] = {
+                2, 0, 0, 0,
+                0, 3, 0, 0,
+                0, 0, 4, 0,
+                0, 0, 0, 1};
+            const float translate[16] = {
+                1, 0, 0, 0,
+                0, 1, 0, 0,
+                0, 0, 1, 0,
+                5, 7, 11, 1};
+            float expected[16]{};
+            writeMat4(env, kA, scale);
+            writeMat4(env, kB, translate);
+            SET_GPR_U32(&env.ctx, 4, kDst);
+            SET_GPR_U32(&env.ctx, 5, kA);
+            SET_GPR_U32(&env.ctx, 6, kB);
+            ps2_stubs::sceVu0MulMatrix(env.rdram.data(), &env.ctx, &env.runtime);
+            readMat4(env, kDst, expected);
+
+            for (const uint32_t destination :
+                 {kA, kB, kA + 16u, 0x80000000u | kDst})
+            {
+                writeMat4(env, kA, scale);
+                writeMat4(env, kB, translate);
+                SET_GPR_U32(&env.ctx, 4, destination);
+                SET_GPR_U32(&env.ctx, 5, kA);
+                SET_GPR_U32(&env.ctx, 6, kB);
+                ps2_stubs::sceVu0MulMatrix(env.rdram.data(), &env.ctx, &env.runtime);
+                float actual[16]{};
+                readMat4(env, destination, actual);
+                for (uint32_t i = 0u; i < 16u; ++i)
+                    t.IsTrue(nearlyEqual(actual[i], expected[i]),
+                             "Matrix product should support overlapping and aliased output");
+            }
         });
 
         tc.Run("RotMatrix_Z_matches_RotMatrixZ", [](TestCase &t)
