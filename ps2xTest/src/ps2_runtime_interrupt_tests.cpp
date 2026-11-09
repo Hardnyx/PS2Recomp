@@ -55,6 +55,8 @@ namespace
     std::atomic<uint32_t> g_lastIntcArg{0u};
     std::atomic<uint32_t> g_lastIntcCause{0u};
     std::atomic<uint32_t> g_vu1VpuStat{0u};
+    bool g_replayIntcUseSdk = false;
+    bool g_replayIntcAcknowledge = false;
     constexpr uint32_t kIdleVSyncWaitPc = 0x00160000u;
     constexpr uint32_t kVSyncWaitPc = 0x00160100u;
     constexpr uint32_t kVSyncResumePc = 0x00160110u;
@@ -247,6 +249,35 @@ namespace
         g_dispatchTrace.push_back(3);
         ctx->pc = 0u;
         runtime->requestStop();
+    }
+
+    void schedulerMaskedIntcWait(uint8_t *, R5900Context *ctx, PS2Runtime *runtime)
+    {
+        g_dispatchTrace.push_back(1);
+        EeScheduler &scheduler = runtime->eeScheduler();
+        PS2Memory &memory = runtime->memory();
+        constexpr uint32_t kVu1Cause = 7u;
+        constexpr uint32_t kVu1Bit = 1u << kVu1Cause;
+
+        scheduler.addIrqHandler(false, kVu1Cause, kVu1IntcHandlerPc,
+                                true, 0xD17u, 0u, 0u);
+        scheduler.dispatchIrq(false, kVu1Cause);
+        scheduler.dispatchIrq(false, kVu1Cause); // Repeated masked level.
+        if (g_replayIntcAcknowledge)
+            memory.write32(0x1000F000u, kVu1Bit);
+
+        if (g_replayIntcUseSdk)
+        {
+            scheduler.setIrqCauseEnabled(false, kVu1Cause, true);
+            scheduler.setIrqCauseEnabled(false, kVu1Cause, true);
+        }
+        else
+        {
+            memory.write32(0x1000F010u, kVu1Bit);
+        }
+
+        ctx->pc = kVu1IntcResumePc;
+        scheduler.waitVSync(scheduler.currentVSyncTick());
     }
 
     void schedulerIrqStackHandler(uint8_t *rdram, R5900Context *ctx, PS2Runtime *)
@@ -915,6 +946,49 @@ void register_ps2_runtime_interrupt_tests()
             memory.write32(kIntcStat, kVu1);
             t.Equals(memory.read32(kIntcStat), 0u,
                      "guest status acknowledgement should clear the remaining source");
+        });
+
+        tc.Run("unmasking a pending INTC cause replays only uncleared status", [](TestCase &t)
+        {
+            constexpr uint32_t kVu1Bit = 1u << 7u;
+            for (const bool viaSdk : {false, true})
+            {
+                for (const bool acknowledged : {false, true})
+                {
+                    TestEnv env;
+                    PS2Memory &memory = env.runtime.memory();
+                    t.IsTrue(memory.initialize(), "pending INTC fixture should initialize");
+                    env.runtime.registerFunction(kVu1IntcWaitPc, schedulerMaskedIntcWait);
+                    env.runtime.registerFunction(kVu1IntcHandlerPc, schedulerVu1IntcHandler);
+                    env.runtime.registerFunction(kVu1IntcResumePc, schedulerVu1IntcResume);
+
+                    g_replayIntcUseSdk = viaSdk;
+                    g_replayIntcAcknowledge = acknowledged;
+                    g_dispatchTrace.clear();
+                    g_lastIntcCause.store(0u, std::memory_order_relaxed);
+                    g_lastIntcArg.store(0u, std::memory_order_relaxed);
+                    R5900Context context{};
+                    context.pc = kVu1IntcWaitPc;
+                    env.runtime.eeScheduler().reset(memory.getRDRAM(), context);
+                    env.runtime.eeScheduler().run();
+
+                    const std::vector<int> expected = acknowledged
+                        ? std::vector<int>{1, 3} : std::vector<int>{1, 2, 3};
+                    t.IsTrue(g_dispatchTrace == expected,
+                             "masked cause should replay once when enabled unless W1C acknowledged");
+                    t.Equals(memory.read32(0x1000F000u) & kVu1Bit,
+                             acknowledged ? 0u : kVu1Bit,
+                             "masked pending status must reflect guest acknowledgement");
+                    t.Equals(memory.read32(0x1000F010u) & kVu1Bit, kVu1Bit,
+                             "SDK and MMIO paths must enable the same physical bit");
+                    t.Equals(g_lastIntcCause.load(std::memory_order_relaxed),
+                             acknowledged ? 0u : 7u,
+                             "replayed handler must receive the original INTC cause");
+                    t.Equals(g_lastIntcArg.load(std::memory_order_relaxed),
+                             acknowledged ? 0u : 0xD17u,
+                             "replayed handler must retain its registration argument");
+                }
+            }
         });
 
         tc.Run("VU1 D/T stops raise INTC_VU1 through the EE scheduler", [](TestCase &t)

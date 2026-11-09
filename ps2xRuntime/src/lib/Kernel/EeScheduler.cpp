@@ -105,6 +105,7 @@ void EeScheduler::reset(uint8_t *rdram, const R5900Context &mainContext)
     m_dmacHeadOrder = 0;
     m_dmacTailOrder = 1000;
     m_enabledDmacMask = 0xFFFFFFFFu;
+    m_maskedIntcPending = 0u;
     m_currentThreadId = 0;
     m_rescheduleRequested = false;
     m_timeSliceExpired = false;
@@ -1272,9 +1273,21 @@ void EeScheduler::dispatchIrq(bool dmac, uint32_t cause)
     {
         m_runtime.memory().latchEeIntcCause(cause);
         constexpr uint32_t kIntcMask = 0x1000F010u;
-        if (cause >= 16u ||
-            (m_runtime.memory().readIORegister(kIntcMask) & (1u << cause)) == 0u)
+        if (cause >= 16u)
             return;
+
+        const uint32_t bit = 1u << cause;
+        if ((m_runtime.memory().readIORegister(kIntcMask) & bit) == 0u)
+        {
+            // A masked cause must not be dispatched yet. Repeated raises
+            // collapse into one pending level until the next checkpoint.
+            m_maskedIntcPending |= bit;
+            return;
+        }
+
+        // A newly enabled, explicitly raised cause supersedes an older
+        // masked occurrence; it must not invoke the handler twice.
+        m_maskedIntcPending &= ~bit;
     }
     else if (cause < 32u && (m_enabledDmacMask & (1u << cause)) == 0u)
     {
@@ -1760,9 +1773,36 @@ void EeScheduler::applyPendingPreemption()
     m_timeSliceExpired = false;
 }
 
+void EeScheduler::deliverMaskedIntcCauses()
+{
+    assertExecutor();
+    if (m_maskedIntcPending == 0u)
+        return;
+
+    PS2Memory &memory = m_runtime.memory();
+    constexpr uint32_t kIntcStat = 0x1000F000u;
+    constexpr uint32_t kIntcMask = 0x1000F010u;
+
+    // A guest W1C acknowledgement cancels a masked occurrence. If the
+    // guest has enabled an uncleared source, dispatch it exactly once.
+    m_maskedIntcPending &= memory.readIORegister(kIntcStat);
+    const uint32_t deliverable = m_maskedIntcPending & memory.readIORegister(kIntcMask);
+    for (uint32_t cause = 0u; cause < 16u; ++cause)
+    {
+        const uint32_t bit = 1u << cause;
+        if ((deliverable & bit) == 0u)
+            continue;
+
+        m_maskedIntcPending &= ~bit;
+        dispatchIrq(false, cause);
+    }
+}
+
 void EeScheduler::processPendingEvents()
 {
     assertExecutor();
+    // Observe raw guest MMIO mask writes even when no host deadline is due.
+    deliverMaskedIntcCauses();
     const uint64_t deadline = m_nextDeadlineCycle.load(std::memory_order_acquire);
     if (!m_checkpointPending.load(std::memory_order_acquire) &&
         (deadline == 0u || m_eeCycle < deadline))

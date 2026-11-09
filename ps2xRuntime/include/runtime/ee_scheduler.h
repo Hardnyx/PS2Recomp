@@ -387,6 +387,7 @@ private:
     void requestPreemptionIfHigher(const GuestThread &readyThread, bool interruptSafe);
     void applyPendingPreemption();
     void processPendingEvents();
+    void deliverMaskedIntcCauses();
     void processDueDeadlines();
     void processEvent(const EeEvent &event);
     void finishEventWaiters(EeEventFlag &flag, bool interruptSafe);
@@ -423,6 +424,8 @@ private:
     int m_dmacHeadOrder = 0;
     int m_dmacTailOrder = 1000;
     uint32_t m_enabledDmacMask = 0xFFFFFFFFu;
+    // Sources raised while masked wait for a later EE dispatch checkpoint.
+    uint32_t m_maskedIntcPending = 0u;
     int m_currentThreadId = 0;
     bool m_rescheduleRequested = false;
     bool m_timeSliceExpired = false;
