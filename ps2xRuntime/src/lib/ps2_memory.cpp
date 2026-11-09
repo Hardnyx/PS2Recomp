@@ -1122,6 +1122,13 @@ void PS2Memory::write128(uint32_t address, __m128i value)
     }
 }
 
+void PS2Memory::latchEeIntcCause(uint32_t cause)
+{
+    // EE INTC has sixteen hardware status/mask bits; other causes are ignored.
+    if (cause < 16u)
+        m_ioRegisters[0x1000F000u] |= 1u << cause;
+}
+
 bool PS2Memory::writeIORegister(uint32_t address, uint32_t value)
 {
     size_t timerIndex = 0u;
@@ -1195,6 +1202,18 @@ bool PS2Memory::writeIORegister(uint32_t address, uint32_t value)
         {
             m_ioRegisters[address] = value;
         }
+        return true;
+    }
+
+    if (address == 0x1000F000u) // INTC_STAT: writing one acknowledges a latched source.
+    {
+        m_ioRegisters[address] &= ~(value & 0xFFFFu);
+        return true;
+    }
+
+    if (address == 0x1000F010u) // INTC_MASK: writing one toggles enablement.
+    {
+        m_ioRegisters[address] ^= value & 0xFFFFu;
         return true;
     }
 

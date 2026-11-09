@@ -304,6 +304,9 @@ public:
     size_t tlbEntryCount() const { return m_tlbEntries.size(); }
 
     // Hardware register interface
+    // Latch an EE INTC source independently of its guest-visible enable mask.
+    // Scheduler IRQ delivery remains a separate runtime responsibility.
+    void latchEeIntcCause(uint32_t cause);
     bool writeIORegister(uint32_t address, uint32_t value);
     uint32_t readIORegister(uint32_t address);
 

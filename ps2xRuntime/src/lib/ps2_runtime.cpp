@@ -724,6 +724,9 @@ bool PS2Runtime::syncCoreSubsystems()
         {
             return;
         }
+        // Hardware status latches the source even when its raw INTC mask is
+        // disabled. The existing scheduler handler path is unchanged here.
+        m_memory.latchEeIntcCause(kIntcVu1Cause);
         m_eeScheduler->dispatchIrq(false, kIntcVu1Cause);
         m_vu1.state().interruptRaised = false;
     };

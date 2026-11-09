@@ -179,6 +179,53 @@ void register_ps2_memory_tests()
             t.Equals(mem.read32(0x00103000u), 0x2468ACE0u, "writes through 0x3010 alias should land in base RDRAM");
         });
 
+        tc.Run("EE INTC status acknowledges and mask toggles on write-one", [](TestCase &t)
+        {
+            PS2Memory mem;
+            t.IsTrue(mem.initialize(), "INTC register fixture should initialize");
+
+            constexpr uint32_t kIntcStat = 0x1000F000u;
+            constexpr uint32_t kIntcMask = 0x1000F010u;
+            constexpr uint32_t kVu1Cause = 1u << 7u;
+            constexpr uint32_t kTimerCause = 1u << 9u;
+
+            t.Equals(mem.read32(kIntcStat), 0u, "INTC_STAT starts clear");
+            t.Equals(mem.read32(kIntcMask), 0u, "INTC_MASK starts clear");
+
+            // A disabled interrupt still latches its source for guest polling.
+            mem.latchEeIntcCause(7u);
+            mem.latchEeIntcCause(9u);
+            mem.latchEeIntcCause(16u); // Outside the sixteen hardware sources.
+            t.Equals(mem.read32(kIntcStat), kVu1Cause | kTimerCause,
+                     "INTC_STAT should retain independent pending causes");
+
+            mem.write32(kIntcStat, 0u);
+            t.Equals(mem.read32(kIntcStat), kVu1Cause | kTimerCause,
+                     "writing zero must not acknowledge a pending cause");
+            mem.write32(kIntcStat, kVu1Cause);
+            t.Equals(mem.read32(kIntcStat), kTimerCause,
+                     "writing one must acknowledge only the selected source");
+            mem.write32(kIntcStat, 0xFFFFFFFFu);
+            t.Equals(mem.read32(kIntcStat), 0u,
+                     "writing one to all status bits must clear pending causes");
+
+            mem.write32(kIntcMask, kVu1Cause | kTimerCause);
+            t.Equals(mem.read32(kIntcMask), kVu1Cause | kTimerCause,
+                     "INTC_MASK must enable bits selected by write-one");
+            mem.write32(kIntcMask, kVu1Cause);
+            t.Equals(mem.read32(kIntcMask), kTimerCause,
+                     "a second write-one must disable the selected bit");
+            mem.write32(kIntcMask, 0u);
+            t.Equals(mem.read32(kIntcMask), kTimerCause,
+                     "writing zero must leave the mask unchanged");
+            mem.write32(kIntcMask, 0xFFFF0000u);
+            t.Equals(mem.read32(kIntcMask), kTimerCause,
+                     "high reserved bits must not modify the mask");
+            mem.write32(kIntcMask, kTimerCause);
+            t.Equals(mem.read32(kIntcMask), 0u,
+                     "write-one toggling should restore the initial mask");
+        });
+
         tc.Run("translateAddress handles kseg and uncached aliases", [](TestCase &t)
         {
             PS2Memory mem;

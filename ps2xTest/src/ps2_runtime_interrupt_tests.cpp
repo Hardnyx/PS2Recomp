@@ -851,6 +851,15 @@ void register_ps2_runtime_interrupt_tests()
                 t.Equals(g_lastIntcArg.load(std::memory_order_relaxed),
                          sample.expectInterrupt ? 0xD17u : 0u,
                          "the VU1 interrupt handler should receive its registered argument");
+
+                constexpr uint32_t kIntcStat = 0x1000F000u;
+                constexpr uint32_t kVu1StatusBit = 1u << 7u;
+                t.Equals(memory.read32(kIntcStat),
+                         sample.expectInterrupt ? kVu1StatusBit : 0u,
+                         "enabled VU1 D/T must latch INTC_STAT independently of the scheduler handler");
+                memory.write32(kIntcStat, kVu1StatusBit);
+                t.Equals(memory.read32(kIntcStat), 0u,
+                         "guest acknowledgement must clear the VU1 status bit");
             }
         });
 
