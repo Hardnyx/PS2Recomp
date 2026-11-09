@@ -524,15 +524,16 @@ void register_ps2_vu1_tests()
             };
             constexpr uint32_t lowerNop = 0x8000033Cu;
             constexpr uint32_t end = kVuUpperNop | 0x40000000u;
-            const float source1[4] = {18.0f, 2.0f, 3.0f, 0.0f};
-            const float source2[4] = {3.0f, 0.0f, 0.0f, 0.0f};
-            uint32_t raw1[4]{};
-            uint32_t raw2[4]{};
-            std::memcpy(raw1, source1, sizeof raw1);
-            std::memcpy(raw2, source2, sizeof raw2);
-
             for (const ScalarCase &sample : cases)
             {
+                const float source1[4] = {
+                    sample.efu ? 1.0f : 18.0f, 2.0f, 3.0f, 0.0f
+                };
+                const float source2[4] = {3.0f, 0.0f, 0.0f, 0.0f};
+                uint32_t raw1[4]{};
+                uint32_t raw2[4]{};
+                std::memcpy(raw1, source1, sizeof raw1);
+                std::memcpy(raw2, source2, sizeof raw2);
                 Vu1Fixture fx;
                 Vu1Fixture nativeFx;
                 t.IsTrue(fx.initialize(), "KZVU scalar fixture should initialize");
