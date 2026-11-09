@@ -757,6 +757,69 @@ void register_ps2_runtime_interrupt_tests()
             }
         });
 
+        tc.Run("VIF1 FLUSH barriers preserve real MSCAL to MSCNT continuation", [](TestCase &t)
+        {
+#if defined(PS2X_TEST_KZVU_VU1)
+            constexpr bool referenceSelections[] = {false, true};
+#else
+            constexpr bool referenceSelections[] = {false};
+#endif
+            constexpr uint32_t lowerNop = 0x8000033cu;
+            constexpr uint32_t upperNop = 0x000002FFu;
+            constexpr uint32_t upperEnd = upperNop | 0x40000000u;
+            constexpr uint32_t setVi1 = (0x08u << 25) | (1u << 16) | 42u;
+            constexpr uint32_t storeVi1 = (0x05u << 25) | (0x8u << 21) | (1u << 16);
+            constexpr uint32_t pairs[][2] = {
+                {setVi1, upperEnd},
+                {lowerNop, upperNop},
+                {storeVi1, upperEnd},
+                {lowerNop, upperNop},
+            };
+            constexpr uint32_t commands[] = {
+                0x14000000u, // MSCAL 0
+                0x10000000u, // FLUSHE
+                0x11000000u, // FLUSH
+                0x13000000u, // FLUSHA
+                0x17000000u, // MSCNT
+            };
+
+            for (const bool referenceSelected : referenceSelections)
+            {
+                TestEnv env;
+                PS2Memory &memory = env.runtime.memory();
+                t.IsTrue(memory.initialize(), "VIF1 FLUSH fixture should initialize");
+                t.IsTrue(env.runtime.syncCoreSubsystems(),
+                         "VU1 callbacks should bind for FLUSH integration");
+                if (!memory.getVU1Code() || !memory.getVU1Data())
+                    continue;
+
+                for (uint32_t i = 0u; i < 4u; ++i)
+                {
+                    memory.write32(PS2_VU1_CODE_BASE + i * 8u, pairs[i][0]);
+                    memory.write32(PS2_VU1_CODE_BASE + i * 8u + 4u, pairs[i][1]);
+                }
+
+#if defined(PS2X_TEST_KZVU_VU1)
+                std::unique_ptr<PS2Vu1Kzvu> referenceSession;
+                if (referenceSelected)
+                    referenceSession = std::make_unique<PS2Vu1Kzvu>(memory, true);
+#endif
+                memory.processVIF1Data(
+                    reinterpret_cast<const uint8_t *>(commands), sizeof(commands));
+
+                uint32_t storedVi1 = 0u;
+                std::memcpy(&storedVi1, memory.getVU1Data(), sizeof storedVi1);
+                t.Equals(storedVi1, 42u,
+                         "MSCNT must observe the earlier VI value across all FLUSH commands");
+                t.Equals(env.runtime.vu1().state().pc, 32u,
+                         "MSCNT must reach the E-bit delay-slot TPC after FLUSH");
+                t.IsTrue(!env.runtime.vu1().state().budgetExhausted,
+                         "FLUSH commands must not leave a pending synchronous VU1 execution");
+                t.Equals(memory.vif1_regs.code, 0x17000000u,
+                         "VIF1 CODE should retain the terminal MSCNT command");
+            }
+        });
+
         tc.Run("VIF1 MSCAL and MSCNT propagate TOPS and ITOP", [](TestCase &t)
         {
 #if defined(PS2X_TEST_KZVU_VU1)
