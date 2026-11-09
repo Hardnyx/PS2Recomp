@@ -226,6 +226,62 @@ void register_ps2_memory_tests()
                      "write-one toggling should restore the initial mask");
         });
 
+        tc.Run("narrow interrupt writes preserve unrelated W1C and W1T bits", [](TestCase &t)
+        {
+            PS2Memory mem;
+            t.IsTrue(mem.initialize(), "narrow interrupt register fixture should initialize");
+
+            constexpr uint32_t kIntcStat = 0x1000F000u;
+            constexpr uint32_t kIntcMask = 0x1000F010u;
+            constexpr uint32_t kDStat = 0x1000E010u;
+            constexpr uint32_t kVu1 = 1u << 7u;
+            constexpr uint32_t kTimer0 = 1u << 9u;
+
+            mem.latchEeIntcCause(7u);
+            mem.latchEeIntcCause(9u);
+            mem.write8(kIntcStat, 0u);
+            t.Equals(mem.read32(kIntcStat), kVu1 | kTimer0,
+                     "byte write-zero must not acknowledge other pending INTC sources");
+            mem.write8(kIntcStat, 0x80u);
+            t.Equals(mem.read32(kIntcStat), kTimer0,
+                     "low-byte acknowledgement must preserve a high-byte source");
+            mem.write16(kIntcStat, 0u);
+            t.Equals(mem.read32(kIntcStat), kTimer0,
+                     "halfword write-zero must not clear a pending INTC source");
+            mem.write8(kIntcStat + 1u, 0x02u);
+            t.Equals(mem.read32(kIntcStat), 0u,
+                     "high-byte acknowledgement must clear only the addressed source");
+
+            mem.write32(kIntcMask, kVu1 | kTimer0);
+            mem.write8(kIntcMask, 0u);
+            t.Equals(mem.read32(kIntcMask), kVu1 | kTimer0,
+                     "byte write-zero must not toggle existing enabled sources");
+            mem.write8(kIntcMask, 0x80u);
+            t.Equals(mem.read32(kIntcMask), kTimer0,
+                     "low-byte toggle must preserve a high-byte mask bit");
+            mem.write16(kIntcMask, 0u);
+            t.Equals(mem.read32(kIntcMask), kTimer0,
+                     "halfword write-zero must preserve enabled sources");
+            mem.write16(kIntcMask + 2u, 0xFFFFu);
+            t.Equals(mem.read32(kIntcMask), kTimer0,
+                     "write to reserved high halfword must not toggle active INTC mask");
+            mem.write16(kIntcMask, static_cast<uint16_t>(kTimer0));
+            t.Equals(mem.read32(kIntcMask), 0u,
+                     "low-halfword toggle must disable only its addressed source");
+
+            // D_STAT is also write-one-to-clear/toggle: an unrelated byte
+            // store must not flip its retained high-half channel mask.
+            mem.write32(kDStat, 1u << 16u);
+            t.IsTrue((mem.read32(kDStat) & (1u << 16u)) != 0u,
+                     "D_STAT channel mask must toggle on");
+            mem.write8(kDStat, 0u);
+            t.IsTrue((mem.read32(kDStat) & (1u << 16u)) != 0u,
+                     "D_STAT byte write-zero must not toggle the unrelated channel mask");
+            mem.write16(kDStat + 2u, 1u);
+            t.Equals(mem.read32(kDStat) & (1u << 16u), 0u,
+                     "D_STAT high halfword must toggle only the requested mask bit");
+        });
+
         tc.Run("translateAddress handles kseg and uncached aliases", [](TestCase &t)
         {
             PS2Memory mem;

@@ -893,11 +893,22 @@ void PS2Memory::write8(uint32_t address, uint8_t value)
     }
     if (isIoRegister(physAddr))
     {
-        // IO registers - handle byte writes by modifying the appropriate byte in the word
-        uint32_t regAddr = physAddr & ~0x3;
-        uint32_t shift = (physAddr & 3) * 8;
-        uint32_t mask = ~(0xFF << shift);
-        uint32_t newValue = (m_ioRegisters[regAddr] & mask) | ((uint32_t)value << shift);
+        const uint32_t regAddr = physAddr & ~0x3u;
+        const uint32_t shift = (physAddr & 3u) * 8u;
+        // W1C/W1T registers consume write strobes, not a replacement word.
+        // Merging the existing register value would inadvertently acknowledge
+        // pending interrupts or toggle unrelated enabled sources.
+        if (regAddr == 0x1000E010u || // D_STAT
+            regAddr == 0x1000F000u || // INTC_STAT
+            regAddr == 0x1000F010u)   // INTC_MASK
+        {
+            writeIORegister(regAddr, static_cast<uint32_t>(value) << shift);
+            return;
+        }
+
+        const uint32_t mask = ~(0xFFu << shift);
+        const uint32_t newValue =
+            (m_ioRegisters[regAddr] & mask) | (static_cast<uint32_t>(value) << shift);
         writeIORegister(regAddr, newValue);
     }
 }
@@ -936,10 +947,19 @@ void PS2Memory::write16(uint32_t address, uint16_t value)
     }
     if (isIoRegister(physAddr))
     {
-        uint32_t regAddr = physAddr & ~0x3;
-        uint32_t shift = (physAddr & 2) * 8;
-        uint32_t mask = ~(0xFFFF << shift);
-        uint32_t newValue = (m_ioRegisters[regAddr] & mask) | ((uint32_t)value << shift);
+        const uint32_t regAddr = physAddr & ~0x3u;
+        const uint32_t shift = (physAddr & 2u) * 8u;
+        if (regAddr == 0x1000E010u || // D_STAT
+            regAddr == 0x1000F000u || // INTC_STAT
+            regAddr == 0x1000F010u)   // INTC_MASK
+        {
+            writeIORegister(regAddr, static_cast<uint32_t>(value) << shift);
+            return;
+        }
+
+        const uint32_t mask = ~(0xFFFFu << shift);
+        const uint32_t newValue =
+            (m_ioRegisters[regAddr] & mask) | (static_cast<uint32_t>(value) << shift);
         writeIORegister(regAddr, newValue);
     }
 }
