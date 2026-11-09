@@ -225,7 +225,7 @@ void register_ps2_vu1_tests()
     MiniTest::Case("PS2VU1", [](TestCase &tc)
     {
 #if defined(PS2X_TEST_KZVU_VU1)
-        tc.Run("kzvu terminal cycle counts separate FMAC and non-FMAC cases", [](TestCase &t)
+        tc.Run("kzvu terminal cycle counts across issue distances", [](TestCase &t)
         {
             enum class Operation
             {
@@ -238,16 +238,27 @@ void register_ps2_vu1_tests()
             {
                 const char *name;
                 Operation operation;
-                bool lateIssue;
+                uint32_t endPc;
+                uint32_t issuePc;
             };
             constexpr Case cases[] = {
-                {"NOP control", Operation::Nop, false},
-                {"IADDIU early", Operation::Iaddiu, false},
-                {"IADDIU late", Operation::Iaddiu, true},
-                {"LQ early", Operation::Lq, false},
-                {"LQ late", Operation::Lq, true},
-                {"ADD early", Operation::Add, false},
-                {"ADD late", Operation::Add, true},
+                {"NOP short", Operation::Nop, 16u, 0u},
+                {"NOP six-pair", Operation::Nop, 32u, 0u},
+                {"IADDIU short early", Operation::Iaddiu, 16u, 0u},
+                {"IADDIU short late", Operation::Iaddiu, 16u, 8u},
+                {"IADDIU six-pair early", Operation::Iaddiu, 32u, 0u},
+                {"IADDIU six-pair boundary", Operation::Iaddiu, 32u, 8u},
+                {"IADDIU six-pair late", Operation::Iaddiu, 32u, 16u},
+                {"LQ short early", Operation::Lq, 16u, 0u},
+                {"LQ short late", Operation::Lq, 16u, 8u},
+                {"LQ six-pair early", Operation::Lq, 32u, 0u},
+                {"LQ six-pair boundary", Operation::Lq, 32u, 8u},
+                {"LQ six-pair late", Operation::Lq, 32u, 16u},
+                {"ADD short early", Operation::Add, 16u, 0u},
+                {"ADD short late", Operation::Add, 16u, 8u},
+                {"ADD six-pair early", Operation::Add, 32u, 0u},
+                {"ADD six-pair boundary", Operation::Add, 32u, 8u},
+                {"ADD six-pair late", Operation::Add, 32u, 16u},
             };
 
             for (const Case &sample : cases)
@@ -257,39 +268,39 @@ void register_ps2_vu1_tests()
                 if (!fx.code || !fx.data)
                     continue;
 
-                // PCSX2 classifies LQ and ADD on FMAC. NOP and IADDIU are
-                // controls for terminal completion without an FMAC write.
+                // Fill the complete program, including the E-bit delay slot,
+                // with instructions that both interpreters decode as NOPs.
                 constexpr uint32_t lowerNop = 0x8000033cu;
-                writeVuInstructionPair(fx.code, 0u, lowerNop, kVuUpperNop);
-                writeVuInstructionPair(fx.code, 8u, lowerNop, kVuUpperNop);
+                const uint32_t delayPc = sample.endPc + 8u;
+                for (uint32_t pc = 0u; pc <= delayPc; pc += 8u)
+                    writeVuInstructionPair(fx.code, pc, lowerNop, kVuUpperNop);
 
-                const uint32_t issuePc = sample.lateIssue ? 8u : 0u;
                 switch (sample.operation)
                 {
                 case Operation::Nop:
                     break;
                 case Operation::Iaddiu:
                     writeVuInstructionPair(
-                        fx.code, issuePc, makeVuIaddiu(1u, 0u, 42), kVuUpperNop);
+                        fx.code, sample.issuePc, makeVuIaddiu(1u, 0u, 42), kVuUpperNop);
                     break;
                 case Operation::Lq:
                 {
                     const float source[4] = {1.5f, 2.5f, -3.5f, 4.5f};
                     writeVuQword(fx.data, 1u, source);
                     writeVuInstructionPair(
-                        fx.code, issuePc, makeVuLq(0xFu, 3u, 0u, 1), kVuUpperNop);
+                        fx.code, sample.issuePc, makeVuLq(0xFu, 3u, 0u, 1), kVuUpperNop);
                     break;
                 }
                 case Operation::Add:
                     writeVuInstructionPair(
-                        fx.code, issuePc, lowerNop,
+                        fx.code, sample.issuePc, lowerNop,
                         makeVuUpper(0x28u, 0xFu, 2u, 1u, 3u)); // ADD.xyzw vf3, vf1, vf2
                     break;
                 }
 
                 writeVuInstructionPair(
-                    fx.code, 16u, lowerNop, kVuUpperNop | 0x40000000u); // E-bit
-                writeVuInstructionPair(fx.code, 24u, lowerNop, kVuUpperNop); // delay slot
+                    fx.code, sample.endPc, lowerNop, kVuUpperNop | 0x40000000u); // E-bit
+                writeVuInstructionPair(fx.code, delayPc, lowerNop, kVuUpperNop); // delay slot
 
                 VU1Interpreter native;
                 if (sample.operation == Operation::Add)
@@ -341,24 +352,34 @@ void register_ps2_vu1_tests()
                         }
                     }
                 }
-                t.IsTrue(native.state().cycles > 0u && reference.cycles > 0u,
-                         "both interpreters must report elapsed VU cycles");
+
+                const uint64_t issuedPairs = static_cast<uint64_t>(sample.endPc / 8u) + 2u;
+                t.IsTrue(native.state().cycles >= issuedPairs && reference.cycles >= issuedPairs,
+                         "both interpreters must account for every issued pair");
+                const int64_t nativeDrain =
+                    static_cast<int64_t>(native.state().cycles - issuedPairs);
+                const int64_t referenceDrain =
+                    static_cast<int64_t>(reference.cycles - issuedPairs);
                 const int64_t delta = static_cast<int64_t>(reference.cycles) -
                                       static_cast<int64_t>(native.state().cycles);
                 const char *pipeline =
                     sample.operation == Operation::Iaddiu ? "IALU" :
-                    (sample.operation == Operation::Lq || sample.operation == Operation::Add) ? "FMAC" :
-                    "none";
+                    sample.operation == Operation::Lq ? "PCSX2=FMAC/native=LSU" :
+                    sample.operation == Operation::Add ? "FMAC" : "none";
                 std::cout << "[VU1 terminal-cycle comparison] " << sample.name
                           << " pipeline=" << pipeline
+                          << " issue_pc=" << sample.issuePc
+                          << " ebit_pc=" << sample.endPc
+                          << " issued_pairs=" << issuedPairs
                           << " native=" << native.state().cycles
+                          << " native_drain=" << nativeDrain
                           << " kzvu=" << reference.cycles
-                          << " delta=" << delta << '\n';
-                // Deliberately do not assert cycle parity until the terminal
-                // drain's guest-observable timing contract is established.
+                          << " kzvu_drain=" << referenceDrain
+                          << " delta=" << delta << '\\n';
+                // Cycle parity remains observational until the guest-visible
+                // timing contract is established independently.
             }
         });
-
         tc.Run("kzvu MSCNT starts at TPC and retains the prior program state", [](TestCase &t)
         {
             Vu1Fixture fx;
