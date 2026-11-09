@@ -108,9 +108,11 @@ void PS2Vu1Kzvu::execute(VU1State &state, std::optional<uint32_t> startPc,
                      (state.tBitEnabled ? 1u << 11 : 0u));
     }
 
-    // MSCNT and budget continuation both resume at the saved TPC.
-    const uint32_t entryPc = continuing ? 0xffffffffu : startPc.value_or(0xffffffffu);
-    state.cycles += kzvuExecute(entryPc, maxCycles);
+    // A budget-exhausted program must use MSCNT continuation; kzvuExecute
+    // would first run an already-running program to completion.
+    state.cycles += continuing
+                        ? kzvuContinue(maxCycles)
+                        : kzvuExecute(startPc.value_or(0xffffffffu), maxCycles);
     state.pc = kzvuGetVI(kKzvuTPC) * 8u;
     state.budgetExhausted = kzvuRunning();
 
