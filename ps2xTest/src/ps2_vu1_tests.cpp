@@ -518,25 +518,33 @@ void register_ps2_vu1_tests()
                 bool load;
                 bool store;
                 uint32_t storePc;
+                uint32_t ebitPc;
                 float expectedVf3;
                 float expectedStore;
             };
             constexpr Case cases[] = {
-                {"NOP control", false, false, 8u, 1.0f, 0.0f},
-                {"LQ-only control", true, false, 8u, 10.0f, 0.0f},
-                {"SQ-only control", false, true, 8u, 1.0f, 1.0f},
-                {"LQ to SQ distance 1", true, true, 8u, 10.0f, 10.0f},
-                {"LQ to SQ distance 2", true, true, 16u, 10.0f, 10.0f},
-                {"LQ to SQ distance 3", true, true, 24u, 10.0f, 10.0f},
-                {"LQ to SQ distance 4", true, true, 32u, 10.0f, 10.0f},
-                {"LQ to SQ distance 5", true, true, 40u, 10.0f, 10.0f},
-                {"LQ to SQ distance 6", true, true, 48u, 10.0f, 10.0f},
-                {"LQ to SQ distance 7", true, true, 56u, 10.0f, 10.0f},
+                {"NOP control E64", false, false, 8u, 64u, 1.0f, 0.0f},
+                {"LQ-only control E64", true, false, 8u, 64u, 10.0f, 0.0f},
+                {"SQ-only control E64", false, true, 8u, 64u, 1.0f, 1.0f},
+                {"LQ to SQ distance 1 E64", true, true, 8u, 64u, 10.0f, 10.0f},
+                {"LQ to SQ distance 2 E64", true, true, 16u, 64u, 10.0f, 10.0f},
+                {"LQ to SQ distance 3 E64", true, true, 24u, 64u, 10.0f, 10.0f},
+                {"LQ to SQ distance 4 E64", true, true, 32u, 64u, 10.0f, 10.0f},
+                {"LQ to SQ distance 5 E64", true, true, 40u, 64u, 10.0f, 10.0f},
+                {"LQ to SQ distance 6 E64", true, true, 48u, 64u, 10.0f, 10.0f},
+                {"LQ to SQ distance 7 E64", true, true, 56u, 64u, 10.0f, 10.0f},
+                {"NOP control E96", false, false, 8u, 96u, 1.0f, 0.0f},
+                {"LQ-only control E96", true, false, 8u, 96u, 10.0f, 0.0f},
+                {"SQ-only control E96", false, true, 8u, 96u, 1.0f, 1.0f},
+                {"LQ to SQ distance 1 E96", true, true, 8u, 96u, 10.0f, 10.0f},
+                {"LQ to SQ distance 2 E96", true, true, 16u, 96u, 10.0f, 10.0f},
+                {"LQ to SQ distance 3 E96", true, true, 24u, 96u, 10.0f, 10.0f},
+                {"LQ to SQ distance 4 E96", true, true, 32u, 96u, 10.0f, 10.0f},
+                {"LQ to SQ distance 5 E96", true, true, 40u, 96u, 10.0f, 10.0f},
+                {"LQ to SQ distance 6 E96", true, true, 48u, 96u, 10.0f, 10.0f},
+                {"LQ to SQ distance 7 E96", true, true, 56u, 96u, 10.0f, 10.0f},
             };
             constexpr uint32_t lowerNop = 0x8000033cu;
-            constexpr uint32_t ebitPc = 64u;
-            constexpr uint32_t delayPc = ebitPc + 8u;
-            constexpr uint64_t issuedPairs = delayPc / 8u + 1u;
             const float loaded[4] = {10.0f, 20.0f, 30.0f, 40.0f};
             const float initialVf3[4] = {1.0f, 0.0f, 0.0f, 0.0f};
             uint32_t rawVf3[4]{};
@@ -544,6 +552,9 @@ void register_ps2_vu1_tests()
 
             for (const Case &sample : cases)
             {
+                const uint32_t ebitPc = sample.ebitPc;
+                const uint32_t delayPc = ebitPc + 8u;
+                const uint64_t issuedPairs = delayPc / 8u + 1u;
                 Vu1Fixture fx;
                 Vu1Fixture nativeFx;
                 t.IsTrue(fx.initialize(), "KZVU distance fixture should initialize");
@@ -612,6 +623,7 @@ void register_ps2_vu1_tests()
 
                 std::cout << "[VU1 LQ/SQ distance comparison] " << sample.name
                           << " store_pc=" << sample.storePc
+                          << " ebit_pc=" << ebitPc
                           << " issued_pairs=" << issuedPairs
                           << " native_cycles=" << native.state().cycles
                           << " kzvu_cycles=" << reference.cycles
@@ -620,9 +632,9 @@ void register_ps2_vu1_tests()
                           << " delta=" << static_cast<int64_t>(reference.cycles) -
                                          static_cast<int64_t>(native.state().cycles)
                           << '\n';
-                // Long-program E-bit placement separates issue stalls from
-                // the short-program terminal writeback drain. Cycle parity
-                // remains diagnostic until a hardware contract is proven.
+                // Compare both E-bit placements: the PC 96 endpoint gives
+                // even the latest SQ enough separation to complete before
+                // terminal drain. Cycle parity remains diagnostic.
             }
         });
 
