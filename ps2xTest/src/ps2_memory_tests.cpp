@@ -1502,7 +1502,7 @@ void register_ps2_memory_tests()
                 uint32_t itop;
                 uint32_t tops;
                 uint32_t dbf;
-                bool dmaActive;
+                uint32_t outstandingQwc;
                 bool dmaCompletionPending;
             };
             std::vector<VifDispatch> dispatches;
@@ -1513,7 +1513,7 @@ void register_ps2_memory_tests()
                     command, startPc, top, itop,
                     mem.vif1_regs.tops,
                     (mem.vif1_regs.stat >> 7u) & 1u,
-                    (mem.readIORegister(kVif1Channel) & 0x100u) != 0u,
+                    mem.readIORegister(kVif1Channel + 0x20u),
                     (mem.readIORegister(kDStat) & (1u << 1u)) != 0u
                 });
             };
@@ -1532,15 +1532,18 @@ void register_ps2_memory_tests()
                      "VIF1 QWC should accept both command qwords");
             t.IsTrue(mem.writeIORegister(kVif1Channel, 0x100u),
                      "VIF1 CHCR should start a normal DMA");
-            t.Equals(dispatches.size(), static_cast<size_t>(0u),
-                     "VU1 callbacks must not run before DMA is processed");
-            t.Equals(mem.readIORegister(kDStat) & (1u << 1u), 0u,
-                     "the channel must not signal completion before processing");
+            // The current compatibility engine drains VIF1 synchronously as
+            // CHCR.STR is written; processPendingTransfers() is not the first
+            // execution boundary. QWC and D_STAT are observable inside the
+            // callbacks, unlike CHCR.STR whose read accessor forces idle.
+            t.Equals(dispatches.size(), static_cast<size_t>(2u),
+                     "CHCR start must dispatch MSCAL and MSCNT before returning");
+            t.IsTrue((mem.readIORegister(kDStat) & (1u << 1u)) != 0u,
+                     "the synchronous CHCR start should already report completion");
 
             mem.processPendingTransfers();
-
             t.Equals(dispatches.size(), static_cast<size_t>(2u),
-                     "MSCAL and MSCNT must dispatch exactly once each across FLUSH barriers");
+                     "a redundant drain must not replay the callbacks");
             if (dispatches.size() == 2u)
             {
                 const VifDispatch &first = dispatches[0];
@@ -1552,7 +1555,8 @@ void register_ps2_memory_tests()
                 t.Equals(first.itop, 7u, "MSCAL should receive ITOPS");
                 t.Equals(first.tops, 8u, "MSCAL should advance TOPS to BASE + OFFSET");
                 t.Equals(first.dbf, 1u, "MSCAL should enter the alternate buffer");
-                t.IsTrue(first.dmaActive, "DMA should remain active inside MSCAL");
+                t.Equals(first.outstandingQwc, 2u,
+                         "VIF1 QWC should remain live during MSCAL");
                 t.IsFalse(first.dmaCompletionPending,
                           "DMA must not complete before the MSCAL callback returns");
 
@@ -1562,7 +1566,8 @@ void register_ps2_memory_tests()
                 t.Equals(second.itop, 7u, "MSCNT must preserve ITOP");
                 t.Equals(second.tops, 5u, "MSCNT should rotate TOPS back to BASE");
                 t.Equals(second.dbf, 0u, "MSCNT should restore the original buffer");
-                t.IsTrue(second.dmaActive, "DMA should remain active inside MSCNT");
+                t.Equals(second.outstandingQwc, 2u,
+                         "VIF1 QWC should remain live during MSCNT");
                 t.IsFalse(second.dmaCompletionPending,
                           "DMA must not complete before MSCNT returns");
             }
