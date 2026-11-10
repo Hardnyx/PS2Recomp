@@ -734,6 +734,130 @@ void register_ps2_memory_tests()
                      "reset should not undo an already transferred microprogram word");
         });
 
+        tc.Run("VIF1 UNPACK V4-32 resumes through three DMA qwords", [](TestCase &t)
+        {
+            PS2Memory fragmented;
+            PS2Memory contiguous;
+            t.IsTrue(fragmented.initialize(), "fragmented VIF1 fixture should initialize");
+            t.IsTrue(contiguous.initialize(), "contiguous VIF1 fixture should initialize");
+
+            constexpr uint32_t blocks[][4] = {
+                {makeVifCmd(0x07u, 0u, 0x1111u), 0u, 0u,
+                 makeVifCmd(0x6Cu, 2u, 0x0020u)},
+                {0x11111111u, 0x22222222u, 0x33333333u, 0x44444444u},
+                {0x55555555u, 0x66666666u, 0x77777777u, 0x88888888u},
+                {makeVifCmd(0x07u, 0u, 0x2222u), 0u, 0u, 0u}
+            };
+            for (uint32_t block = 0u; block < 4u; ++block)
+            {
+                fragmented.processVIF1Data(
+                    reinterpret_cast<const uint8_t *>(blocks[block]), 16u);
+                if (block < 2u)
+                {
+                    uint32_t untouched = 0xFFFFFFFFu;
+                    std::memcpy(&untouched, fragmented.getVU1Data() + 0x20u * 16u, 4u);
+                    t.Equals(untouched, 0u,
+                             "incomplete UNPACK must not publish partial VU1 vector data");
+                }
+            }
+            contiguous.processVIF1Data(reinterpret_cast<const uint8_t *>(blocks),
+                                       sizeof(blocks));
+            t.IsTrue(std::memcmp(fragmented.getVU1Data(), contiguous.getVU1Data(),
+                                 PS2_VU1_DATA_SIZE) == 0,
+                     "fragmented V4-32 must match the contiguous destination memory");
+            t.Equals(fragmented.vif1_regs.mark, 0x2222u,
+                     "trailing MARK must execute after the completed UNPACK");
+            uint32_t first = 0u, last = 0u;
+            std::memcpy(&first, fragmented.getVU1Data() + 0x20u * 16u, 4u);
+            std::memcpy(&last, fragmented.getVU1Data() + 0x21u * 16u + 12u, 4u);
+            t.Equals(first, 0x11111111u, "first vector must reach the chosen VU1 address");
+            t.Equals(last, 0x88888888u, "second vector must retain its final lane");
+        });
+
+        tc.Run("VIF1 UNPACK preserves zero extension and fill cycles across fragments", [](TestCase &t)
+        {
+            for (const bool zeroExtend : {false, true})
+            {
+                PS2Memory mem;
+                t.IsTrue(mem.initialize(), "V4-16 fragment fixture should initialize");
+                const uint16_t imm = zeroExtend ? 0x4004u : 0x0004u;
+                const uint32_t first[] = {
+                    0u, 0u, makeVifCmd(0x6Du, 1u, imm), 0xFF800001u
+                };
+                const uint32_t next[] = {
+                    0x80017FFFu, makeVifCmd(0x07u, 0u, 0x1357u), 0u, 0u
+                };
+                mem.processVIF1Data(reinterpret_cast<const uint8_t *>(first), 16u);
+                uint32_t incomplete = 0xFFFFFFFFu;
+                std::memcpy(&incomplete, mem.getVU1Data() + 4u * 16u, 4u);
+                t.Equals(incomplete, 0u, "half-complete V4-16 must not update VU1 data");
+
+                mem.processVIF1Data(reinterpret_cast<const uint8_t *>(next), 16u);
+                uint32_t y = 0u, w = 0u;
+                std::memcpy(&y, mem.getVU1Data() + 4u * 16u + 4u, 4u);
+                std::memcpy(&w, mem.getVU1Data() + 4u * 16u + 12u, 4u);
+                t.Equals(y, zeroExtend ? 0x0000FF80u : 0xFFFFFF80u,
+                         "V4-16 extension mode must survive fragmented transport");
+                t.Equals(w, zeroExtend ? 0x00008001u : 0xFFFF8001u,
+                         "final V4-16 lane must survive fragmented transport");
+                t.Equals(mem.vif1_regs.mark, 0x1357u,
+                         "MARK after fragmented V4-16 must run exactly once");
+            }
+
+            PS2Memory mem;
+            PS2Memory contiguous;
+            t.IsTrue(mem.initialize(), "fill-cycle fixture should initialize");
+            t.IsTrue(contiguous.initialize(), "fill-cycle reference should initialize");
+            for (PS2Memory *target : {&mem, &contiguous})
+            {
+                target->vif1_regs.cycle = (3u << 8) | 1u; // CL=1, WL=3
+                target->vif1_regs.mask = 0x55555555u;
+                for (uint32_t i = 0u; i < 4u; ++i)
+                    target->vif1_regs.row[i] = 10u + i;
+            }
+            constexpr uint32_t blocks[][4] = {
+                {0u, 0u, makeVifCmd(0x7Cu, 3u, 0u), 0xAAAABBBBu},
+                {0xCCCCDDDDu, 0xEEEEFFFFu, 0x12345678u,
+                 makeVifCmd(0x07u, 0u, 0x2468u)}
+            };
+            mem.processVIF1Data(reinterpret_cast<const uint8_t *>(blocks[0]), 16u);
+            mem.processVIF1Data(reinterpret_cast<const uint8_t *>(blocks[1]), 16u);
+            contiguous.processVIF1Data(reinterpret_cast<const uint8_t *>(blocks),
+                                       sizeof(blocks));
+            t.IsTrue(std::memcmp(mem.getVU1Data(), contiguous.getVU1Data(),
+                                 PS2_VU1_DATA_SIZE) == 0,
+                     "fill-cycle UNPACK must preserve masked row writes when fragmented");
+            for (uint32_t vec = 0u; vec < 3u; ++vec)
+            {
+                uint32_t x = 0u;
+                std::memcpy(&x, mem.getVU1Data() + vec * 16u, 4u);
+                t.Equals(x, 10u, "STCYCL fill must write the configured row value");
+            }
+            t.Equals(mem.vif1_regs.mark, 0x2468u,
+                     "trailing MARK must execute after the fill-cycle UNPACK");
+        });
+
+        tc.Run("VIF1 reset discards an incomplete UNPACK payload", [](TestCase &t)
+        {
+            PS2Memory mem;
+            t.IsTrue(mem.initialize(), "UNPACK reset fixture should initialize");
+            constexpr uint32_t partial[] = {
+                makeVifCmd(0x6Cu, 2u, 0u), 1u, 2u, 3u
+            };
+            constexpr uint32_t following[] = {
+                makeVifCmd(0x07u, 0u, 0x4321u), 0u, 0u, 0u
+            };
+            mem.processVIF1Data(reinterpret_cast<const uint8_t *>(partial), 16u);
+            t.IsTrue(mem.writeIORegister(0x10003C10u, 1u),
+                     "FBRST.RST should discard pending UNPACK state");
+            mem.processVIF1Data(reinterpret_cast<const uint8_t *>(following), 16u);
+            t.Equals(mem.vif1_regs.mark, 0x4321u,
+                     "post-reset MARK must not be consumed as the old UNPACK payload");
+            uint32_t untouched = 0xFFFFFFFFu;
+            std::memcpy(&untouched, mem.getVU1Data(), 4u);
+            t.Equals(untouched, 0u, "cancelled UNPACK must leave VU1 memory untouched");
+        });
+
         tc.Run("VIF UNPACK V4-16 sign and zero extension follow immediate bit14", [](TestCase &t)
         {
             PS2Memory mem;

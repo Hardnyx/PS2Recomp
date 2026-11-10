@@ -424,6 +424,10 @@ public:
     // microinstruction at the boundary of two 16-byte transport blocks.
     uint32_t m_vif1PendingMpgDestination = 0u;
     uint32_t m_vif1PendingMpgBytes = 0u;
+    // UNPACK is bounded to at most 256 V4-32 vectors plus its 4-byte
+    // VIFcode. Keep a partial command until its entire payload arrives.
+    std::vector<uint8_t> m_vif1PendingUnpackPacket;
+    uint32_t m_vif1PendingUnpackBytes = 0u;
     // A DIRECT/DIRECTHL GIF packet can be divided between DMA blocks, even
     // in the middle of a quadword. Defer submission until all declared bytes
     // have arrived, rather than decoding the remainder as VIF instructions.

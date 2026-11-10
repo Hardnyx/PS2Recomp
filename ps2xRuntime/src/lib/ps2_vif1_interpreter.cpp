@@ -302,6 +302,27 @@ void PS2Memory::processVIF1Data(const uint8_t *data, uint32_t sizeBytes)
 
     uint32_t pos = 0;
 
+    if (m_vif1PendingUnpackBytes != 0u)
+    {
+        // Preserve the original command and its decoding parameters.
+        // Only dispatch after the complete, DWORD-padded payload arrives,
+        // so masks, STCYCL and STMOD retain their existing semantics.
+        const uint32_t available = std::min(m_vif1PendingUnpackBytes, sizeBytes);
+        m_vif1PendingUnpackPacket.insert(m_vif1PendingUnpackPacket.end(),
+                                         data, data + available);
+        m_vif1PendingUnpackBytes -= available;
+        pos = available;
+        if (m_vif1PendingUnpackBytes != 0u)
+            return;
+
+        // Reuse the existing full-packet UNPACK decoder. Clear pending
+        // state first so the nested call cannot consume its own payload.
+        std::vector<uint8_t> completePacket;
+        completePacket.swap(m_vif1PendingUnpackPacket);
+        processVIF1Data(completePacket.data(),
+                        static_cast<uint32_t>(completePacket.size()));
+    }
+
     const auto submitDirectPayload = [&](const uint8_t *payload, uint32_t bytes, bool directHl)
     {
         submitGifPacket(GifPathId::Path2, payload, bytes, true, directHl);
@@ -655,7 +676,21 @@ void PS2Memory::processVIF1Data(const uint8_t *data, uint32_t sizeBytes)
 
             const bool zeroExtend = (imm & 0x4000u) != 0u;
 
-            if (m_vu1Data && totalBytes > 0 && pos + totalBytes <= sizeBytes)
+            if (totalBytes > sizeBytes - pos)
+            {
+                // A later DMA block completes this UNPACK. Never decode its
+                // data as opcodes or perform a partial VU1 memory write.
+                const uint32_t available = sizeBytes - pos;
+                m_vif1PendingUnpackPacket.resize(4u + available);
+                std::memcpy(m_vif1PendingUnpackPacket.data(), &cmd, 4u);
+                if (available != 0u)
+                    std::memcpy(m_vif1PendingUnpackPacket.data() + 4u,
+                                data + pos, available);
+                m_vif1PendingUnpackBytes = totalBytes - available;
+                break;
+            }
+
+            if (m_vu1Data && totalBytes > 0u)
             {
                 const uint8_t *srcBase = data + pos;
                 uint32_t srcIndex = 0u;
