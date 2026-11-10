@@ -420,7 +420,33 @@ packet. The public
 [Linux/Windows build](https://github.com/Hardnyx/PS2Recomp/actions/runs/42775869628)
 and
 [KZVU reference regression](https://github.com/Hardnyx/PS2Recomp/actions/runs/42775869506)
-are required before accepting this additional DMA integration control.
+are its independent validation records. The KZVU run passed; only a
+completed build matrix can establish success on all three compilers.
+
+### UNPACK interrupt completion boundary
+
+Fork `7dc2d1e` defers the guest-visible `VIF1_STAT.INT` bit for
+I-bit UNPACK commands until their padded data payload is fully received.
+Previously the interpreter set INT as soon as it decoded the VIFcode,
+even if the command was waiting for a later DMA fragment. The complete
+UNPACK already reuses the original decoder, which now also publishes
+INT when it finishes the source transfer.
+
+Regressions cover an I-bit V4-32 split over three fragments,
+`VIF1_CODE` visibility during the pending command, deferred INT until
+the last fragment, `FBRST.STC` acknowledgement, and `FBRST.RST`
+cancellation before completion. The new candidate is tested via
+[public Linux/Windows workflow](https://github.com/Hardnyx/PS2Recomp/actions/runs/42776865211)
+and
+[public Windows KZVU workflow](https://github.com/Hardnyx/PS2Recomp/actions/runs/42776865197).
+Neither CI run should be treated as passed until complete.
+
+The reference PS2 VIF command format places the I-bit interrupt after
+command execution. This scoped change does not implement
+`VIF1_STAT.VIS` stall scheduling, `INTC_VIF1` delivery to the EE,
+the `VIF1_ERR.MII` mask, or cycle-accurate DMA/FIFO backpressure.
+Other data-bearing VIFcodes still use their existing IRQ behavior,
+which requires separate qualification.
 
 The buffered approach protects the final VU1 data result, but it
 does **not** model incremental visibility of UNPACK vector writes,
