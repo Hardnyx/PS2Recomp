@@ -420,6 +420,10 @@ public:
     Vif1PendingRegister m_vif1PendingRegister = Vif1PendingRegister::None;
     std::array<uint8_t, 16> m_vif1PendingRegisterData{};
     uint32_t m_vif1PendingRegisterBytes = 0u;
+    // MPG payload can span multiple DMA packets, including a partial
+    // microinstruction at the boundary of two 16-byte transport blocks.
+    uint32_t m_vif1PendingMpgDestination = 0u;
+    uint32_t m_vif1PendingMpgBytes = 0u;
     std::vector<std::vector<uint8_t>> m_path3MaskedFifo;
 
     struct PendingTransfer

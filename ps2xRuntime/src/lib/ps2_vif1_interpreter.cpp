@@ -332,6 +332,28 @@ void PS2Memory::processVIF1Data(const uint8_t *data, uint32_t sizeBytes)
         m_vif1PendingRegisterBytes = 0u;
     }
 
+    const auto copyMicroprogramBytes = [&](uint32_t destination, const uint8_t *source, uint32_t count)
+    {
+        if (!m_vu1Code || destination >= PS2_VU1_CODE_SIZE || count == 0u)
+            return;
+        // Preserve the existing out-of-range clipping behavior; consume
+        // all VIF data even if its destination exceeds the code window.
+        const uint32_t copyBytes = std::min(count, PS2_VU1_CODE_SIZE - destination);
+        std::memcpy(m_vu1Code + destination, source, copyBytes);
+        markVU1CodeModified();
+    };
+
+    if (m_vif1PendingMpgBytes != 0u)
+    {
+        const uint32_t available = std::min(m_vif1PendingMpgBytes, sizeBytes - pos);
+        copyMicroprogramBytes(m_vif1PendingMpgDestination, data + pos, available);
+        m_vif1PendingMpgDestination += available;
+        m_vif1PendingMpgBytes -= available;
+        pos += available;
+        if (m_vif1PendingMpgBytes != 0u)
+            return;
+    }
+
     const auto retainFixedPayload = [&](Vif1PendingRegister reg)
     {
         const uint32_t remaining = sizeBytes - pos;
@@ -512,23 +534,18 @@ void PS2Memory::processVIF1Data(const uint8_t *data, uint32_t sizeBytes)
         }
         else if (opcode == VIF_MPG)
         {
-            uint32_t destAddr = (uint32_t)imm * 8u;
+            const uint32_t destination = static_cast<uint32_t>(imm) * 8u;
             const uint32_t instructionCount = (num == 0u) ? 256u : static_cast<uint32_t>(num);
-            const uint32_t mpgBytes = instructionCount * 8u;
-            if (m_vu1Code && destAddr < PS2_VU1_CODE_SIZE && mpgBytes > 0)
+            const uint32_t expected = instructionCount * 8u;
+            const uint32_t available = std::min(expected, sizeBytes - pos);
+            copyMicroprogramBytes(destination, data + pos, available);
+            pos += available;
+            if (available < expected)
             {
-                uint32_t copyBytes = mpgBytes;
-                if (destAddr + copyBytes > PS2_VU1_CODE_SIZE)
-                    copyBytes = PS2_VU1_CODE_SIZE - destAddr;
-                if (pos + copyBytes <= sizeBytes)
-                {
-                    std::memcpy(m_vu1Code + destAddr, data + pos, copyBytes);
-                    markVU1CodeModified();
-                }
-            }
-            pos += mpgBytes;
-            if (pos > sizeBytes)
+                m_vif1PendingMpgDestination = destination + available;
+                m_vif1PendingMpgBytes = expected - available;
                 break;
+            }
             continue;
         }
         else if (opcode == VIF_DIRECT || opcode == VIF_DIRECTHL)

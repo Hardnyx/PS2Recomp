@@ -661,6 +661,79 @@ void register_ps2_memory_tests()
             t.Equals(mem.vif1_regs.row[0], 0u, "reset must leave VIF row data cleared");
         });
 
+        tc.Run("VIF1 MPG microprogram bytes resume across two DMA packets", [](TestCase &t)
+        {
+            PS2Memory mem;
+            t.IsTrue(mem.initialize(), "split MPG DMA fixture should initialize");
+
+            constexpr uint32_t kVif1Ch = 0x10009000u;
+            constexpr uint32_t kFirstSource = 0x0002A000u;
+            constexpr uint32_t kSecondSource = 0x0002A010u;
+            constexpr uint32_t first[] = {
+                0x4A030002u, // MPG: three 8-byte instructions at code offset 16.
+                0x11223344u, 0x55667788u, 0x99AABBCCu
+            };
+            constexpr uint32_t second[] = {
+                0xDDEEFF00u, 0x13572468u, 0x24681357u,
+                0x07001234u // MARK after the final MPG payload word.
+            };
+            std::memcpy(mem.getRDRAM() + kFirstSource, first, sizeof(first));
+            std::memcpy(mem.getRDRAM() + kSecondSource, second, sizeof(second));
+
+            const auto transmit = [&](uint32_t source)
+            {
+                mem.writeIORegister(kVif1Ch + 0x10u, source);
+                mem.writeIORegister(kVif1Ch + 0x20u, 1u);
+                mem.writeIORegister(kVif1Ch, 0x100u);
+            };
+            transmit(kFirstSource);
+
+            t.Equals(mem.read32(PS2_VU1_CODE_BASE + 16u), 0x11223344u,
+                     "MPG should upload its first data word immediately");
+            t.Equals(mem.read32(PS2_VU1_CODE_BASE + 24u), 0x99AABBCCu,
+                     "MPG should accept a partial instruction at the first DMA boundary");
+            t.Equals(mem.read32(PS2_VU1_CODE_BASE + 28u), 0u,
+                     "the incomplete instruction must not invent missing bytes");
+            t.Equals(mem.vif1_regs.mark, 0u,
+                     "pending MPG data must not decode the next packet prematurely");
+
+            transmit(kSecondSource);
+
+            constexpr uint32_t expected[] = {
+                0x11223344u, 0x55667788u, 0x99AABBCCu,
+                0xDDEEFF00u, 0x13572468u, 0x24681357u
+            };
+            for (uint32_t word = 0u; word < 6u; ++word)
+                t.Equals(mem.read32(PS2_VU1_CODE_BASE + 16u + word * 4u),
+                         expected[word], "all MPG words must retain their original order");
+
+            t.Equals(mem.vif1_regs.mark, 0x1234u,
+                     "the next VIFcode must decode after completing MPG data");
+            t.Equals(mem.readIORegister(kVif1Ch + 0x20u), 0u,
+                     "the second DMA should complete without leaving QWC pending");
+        });
+
+        tc.Run("VIF1 reset cancels an incomplete MPG upload", [](TestCase &t)
+        {
+            PS2Memory mem;
+            t.IsTrue(mem.initialize(), "MPG reset fixture should initialize");
+            constexpr uint32_t partial[] = {
+                0x4A020000u, // MPG: two instructions; only 12 of 16 bytes provided.
+                0x11111111u, 0x22222222u, 0x33333333u
+            };
+            constexpr uint32_t following[] = {
+                0x07005678u, 0u, 0u, 0u
+            };
+            mem.processVIF1Data(reinterpret_cast<const uint8_t *>(partial), sizeof(partial));
+            t.IsTrue(mem.writeIORegister(0x10003C10u, 1u), "VIF1 FBRST reset should succeed");
+            mem.processVIF1Data(reinterpret_cast<const uint8_t *>(following), sizeof(following));
+
+            t.Equals(mem.vif1_regs.mark, 0x5678u,
+                     "reset must permit a new command instead of consuming stale MPG data");
+            t.Equals(mem.read32(PS2_VU1_CODE_BASE), 0x11111111u,
+                     "reset should not undo an already transferred microprogram word");
+        });
+
         tc.Run("VIF UNPACK V4-16 sign and zero extension follow immediate bit14", [](TestCase &t)
         {
             PS2Memory mem;
