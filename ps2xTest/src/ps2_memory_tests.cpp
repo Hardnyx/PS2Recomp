@@ -807,6 +807,76 @@ void register_ps2_memory_tests()
                      "a second completion poll must not replay VIF1 DMA causes");
         });
 
+        tc.Run("VIF1 I-bit UNPACK asserts INT only after its payload arrives", [](TestCase &t)
+        {
+            PS2Memory mem;
+            t.IsTrue(mem.initialize(), "VIF1 I-bit UNPACK fixture should initialize");
+
+            constexpr uint32_t kInt = 1u << 11u;
+            const uint32_t command = makeVifCmd(0x6Cu, 2u, 0x0020u) | 0x80000000u;
+            const uint32_t first[] = {0u, 0u, 0u, command};
+            constexpr uint32_t payloadA[] = {1u, 2u, 3u, 4u};
+            constexpr uint32_t payloadB[] = {5u, 6u, 7u, 8u};
+            const uint32_t following[] = {makeVifCmd(0x07u, 0u, 0xABCDu), 0u, 0u, 0u};
+
+            mem.processVIF1Data(reinterpret_cast<const uint8_t *>(first), sizeof first);
+            t.Equals(mem.vif1_regs.code, command,
+                     "VIF1_CODE must expose the current command header");
+            t.Equals(mem.vif1_regs.stat & kInt, 0u,
+                     "reading the UNPACK header must not assert INT early");
+
+            mem.processVIF1Data(reinterpret_cast<const uint8_t *>(payloadA),
+                                sizeof payloadA);
+            t.Equals(mem.vif1_regs.stat & kInt, 0u,
+                     "INT must stay clear while UNPACK is waiting for its final vector");
+            uint32_t untouched = 0xFFFFFFFFu;
+            std::memcpy(&untouched, mem.getVU1Data() + 0x20u * 16u, sizeof untouched);
+            t.Equals(untouched, 0u, "partial UNPACK must not write VU1 data memory");
+
+            mem.processVIF1Data(reinterpret_cast<const uint8_t *>(payloadB),
+                                sizeof payloadB);
+            t.Equals(mem.vif1_regs.stat & kInt, kInt,
+                     "INT should latch when the final UNPACK payload byte is consumed");
+            uint32_t result = 0u;
+            std::memcpy(&result, mem.getVU1Data() + 0x21u * 16u + 12u, sizeof result);
+            t.Equals(result, 8u, "both vectors should complete before INT is published");
+
+            mem.processVIF1Data(reinterpret_cast<const uint8_t *>(following),
+                                sizeof following);
+            t.Equals(mem.vif1_regs.mark, 0xABCDu, "subsequent commands should still decode");
+            t.Equals(mem.vif1_regs.stat & kInt, kInt,
+                     "INT must remain latched until guest acknowledgement");
+
+            t.IsTrue(mem.writeIORegister(0x10003C10u, 0x8u),
+                     "FBRST.STC should accept a stall-clear request");
+            t.Equals(mem.vif1_regs.stat & kInt, 0u,
+                     "stall-clear must acknowledge the pending VIF interrupt");
+        });
+
+        tc.Run("VIF1 reset cancels a fragmented I-bit UNPACK", [](TestCase &t)
+        {
+            PS2Memory mem;
+            t.IsTrue(mem.initialize(), "cancelled UNPACK IRQ fixture should initialize");
+            constexpr uint32_t kInt = 1u << 11u;
+            const uint32_t first[] = {
+                makeVifCmd(0x6Cu, 2u, 0x0000u) | 0x80000000u, 1u, 2u, 3u
+            };
+            const uint32_t afterReset[] = {
+                makeVifCmd(0x07u, 0u, 0x2468u), 0u, 0u, 0u
+            };
+            mem.processVIF1Data(reinterpret_cast<const uint8_t *>(first), sizeof first);
+            t.Equals(mem.vif1_regs.stat & kInt, 0u,
+                     "incomplete I-bit UNPACK must not assert INT");
+            t.IsTrue(mem.writeIORegister(0x10003C10u, 0x1u),
+                     "VIF1 reset should cancel the incomplete command");
+            mem.processVIF1Data(reinterpret_cast<const uint8_t *>(afterReset),
+                                sizeof afterReset);
+            t.Equals(mem.vif1_regs.mark, 0x2468u,
+                     "post-reset MARK must not be consumed as old UNPACK data");
+            t.Equals(mem.vif1_regs.stat & kInt, 0u,
+                     "reset must discard the aborted UNPACK interrupt");
+        });
+
         tc.Run("VIF1 UNPACK V4-32 resumes through three DMA qwords", [](TestCase &t)
         {
             PS2Memory fragmented;

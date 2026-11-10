@@ -455,7 +455,10 @@ void PS2Memory::processVIF1Data(const uint8_t *data, uint32_t sizeBytes)
         // Track most-recent command for VIFn_CODE emulation.
         vif1_regs.code = cmd;
         vif1_regs.num = num;
-        if (irq)
+        // A payload-bearing UNPACK must complete before its I-bit can
+        // assert VIF1_STAT.INT. Other VIFcodes keep their existing
+        // immediate behavior until their stall model is qualified.
+        if (irq && (opcode & 0x60u) != 0x60u)
             vif1_regs.stat |= (1u << 11); // INT
 
         if (opcode == VIF_NOP)
@@ -689,6 +692,11 @@ void PS2Memory::processVIF1Data(const uint8_t *data, uint32_t sizeBytes)
                 m_vif1PendingUnpackBytes = totalBytes - available;
                 break;
             }
+
+            // This branch executes for both one-shot and reassembled
+            // UNPACK commands. A partial payload must not set INT.
+            if (irq)
+                vif1_regs.stat |= (1u << 11);
 
             if (m_vu1Data && totalBytes > 0u)
             {
