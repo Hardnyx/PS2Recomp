@@ -734,6 +734,79 @@ void register_ps2_memory_tests()
                      "reset should not undo an already transferred microprogram word");
         });
 
+        tc.Run("VIF1 normal-mode DMA resumes split UNPACK and later commands", [](TestCase &t)
+        {
+            PS2Memory mem;
+            PS2Memory continuous;
+            t.IsTrue(mem.initialize(), "VIF1 DMA stream fixture should initialize");
+            t.IsTrue(continuous.initialize(), "contiguous UNPACK baseline should initialize");
+
+            constexpr uint32_t kVif1Ch = 0x10009000u;
+            constexpr uint32_t kSource = 0x0002C000u;
+            constexpr uint32_t kDStat = 0x1000E010u;
+            const uint32_t blocks[][4] = {
+                {makeVifCmd(0x07u, 0u, 0x1111u), 0u, 0u,
+                 makeVifCmd(0x6Cu, 2u, 0x0020u)}, // V4-32, two vectors.
+                {0x11111111u, 0x22222222u, 0x33333333u, 0x44444444u},
+                {0x55555555u, 0x66666666u, 0x77777777u, 0x88888888u},
+                {makeVifCmd(0x07u, 0u, 0x2222u), 0u, 0u, 0u}
+            };
+            std::memcpy(mem.getRDRAM() + kSource, blocks, sizeof(blocks));
+            continuous.processVIF1Data(reinterpret_cast<const uint8_t *>(blocks),
+                                       static_cast<uint32_t>(sizeof(blocks)));
+
+            for (uint32_t block = 0u; block < 4u; ++block)
+            {
+                t.IsTrue(mem.writeIORegister(kVif1Ch + 0x10u,
+                                            kSource + block * 16u),
+                         "VIF1 MADR must accept the next DMA packet");
+                t.IsTrue(mem.writeIORegister(kVif1Ch + 0x20u, 1u),
+                         "VIF1 QWC must accept one transport quadword");
+                t.IsTrue(mem.writeIORegister(kVif1Ch, 0x100u),
+                         "VIF1 CHCR must start a normal DMA packet");
+
+                t.Equals(mem.readIORegister(kVif1Ch + 0x20u), 0u,
+                         "the synchronous VIF1 DMA must finish each packet");
+                t.IsTrue((mem.readIORegister(kDStat) & (1u << 1u)) != 0u,
+                         "VIF1 channel completion must be latched after each DMA");
+                mem.write32(kDStat, 1u << 1u);
+
+                if (block < 2u)
+                {
+                    uint32_t untouched = 0xFFFFFFFFu;
+                    std::memcpy(&untouched,
+                                mem.getVU1Data() + 0x20u * 16u, sizeof(untouched));
+                    t.Equals(untouched, 0u,
+                             "an incomplete UNPACK must not publish a partial vector");
+                }
+                if (block == 0u)
+                    t.Equals(mem.vif1_regs.mark, 0x1111u,
+                             "the preceding MARK must execute before the UNPACK");
+                if (block == 2u)
+                {
+                    uint32_t lastLane = 0u;
+                    std::memcpy(&lastLane,
+                                mem.getVU1Data() + 0x21u * 16u + 12u,
+                                sizeof(lastLane));
+                    t.Equals(lastLane, 0x88888888u,
+                             "the final UNPACK vector must complete on the third DMA");
+                    t.Equals(mem.vif1_regs.mark, 0x1111u,
+                             "the trailing MARK must not execute before its own DMA");
+                }
+            }
+
+            t.IsTrue(std::memcmp(mem.getVU1Data(), continuous.getVU1Data(),
+                                 PS2_VU1_DATA_SIZE) == 0,
+                     "normal DMA fragments must reproduce contiguous UNPACK memory");
+            t.Equals(mem.vif1_regs.mark, 0x2222u,
+                     "the VIF interpreter must resume decoding after the UNPACK");
+            mem.processPendingTransfers();
+            t.IsTrue(mem.consumeCompletedDmacCauses().size() == 4u,
+                     "each of the four VIF1 DMA packets should notify completion once");
+            t.IsTrue(mem.consumeCompletedDmacCauses().empty(),
+                     "a second completion poll must not replay VIF1 DMA causes");
+        });
+
         tc.Run("VIF1 UNPACK V4-32 resumes through three DMA qwords", [](TestCase &t)
         {
             PS2Memory fragmented;
