@@ -381,6 +381,7 @@ uint32_t PS2Memory::processVIF1DataImpl(const uint8_t *data, uint32_t sizeBytes,
                 {
                     m_vif1PendingPath2ImageEop = false;
                     m_vif1PendingPath2ImageFlg = kGifFmtImage;
+                    m_vif1PendingPath2DirectHl = false;
                 }
             }
         }
@@ -398,6 +399,7 @@ uint32_t PS2Memory::processVIF1DataImpl(const uint8_t *data, uint32_t sizeBytes,
             m_vif1PendingPath2ImageQwc = pendingImageQw;
             m_vif1PendingPath2ImageEop = imageEop;
             m_vif1PendingPath2ImageFlg = imageFlg;
+            m_vif1PendingPath2DirectHl = directHl;
         }
     };
 
@@ -499,6 +501,80 @@ uint32_t PS2Memory::processVIF1DataImpl(const uint8_t *data, uint32_t sizeBytes,
         {
             vif1_regs.stat |= (1u << 10u); // VIS: interrupted VIF1 DMA
             break;
+        }
+
+        if (!m_vif1DmaProcessing && m_vif1PendingPath2ImageQwc != 0u)
+        {
+            // Direct component/replay callers historically provide raw
+            // IMAGE data after a short DIRECT GIFtag in the same buffer.
+            // Keep that compatibility separate from VIF1 DMA parsing.
+            if (m_vif1PendingPath2ImagePartialBytes != 0u)
+            {
+                const uint32_t needed = 16u - m_vif1PendingPath2ImagePartialBytes;
+                const uint32_t copied = std::min(needed, sizeBytes - pos);
+                std::memcpy(m_vif1PendingPath2ImagePartial.data() +
+                                m_vif1PendingPath2ImagePartialBytes,
+                            data + pos, copied);
+                m_vif1PendingPath2ImagePartialBytes += copied;
+                pos += copied;
+                if (m_vif1PendingPath2ImagePartialBytes != 16u)
+                    break;
+
+                std::array<uint8_t, 32> packet{};
+                const uint64_t imageTag =
+                    1ull |
+                    ((m_vif1PendingPath2ImageQwc == 1u && m_vif1PendingPath2ImageEop)
+                         ? (1ull << 15u) : 0ull) |
+                    (static_cast<uint64_t>(m_vif1PendingPath2ImageFlg) << 58u);
+                std::memcpy(packet.data(), &imageTag, sizeof(imageTag));
+                std::memcpy(packet.data() + 16u,
+                            m_vif1PendingPath2ImagePartial.data(), 16u);
+                submitGifPacket(GifPathId::Path2, packet.data(),
+                                static_cast<uint32_t>(packet.size()), true,
+                                m_vif1PendingPath2DirectHl);
+                m_vif1PendingPath2ImagePartialBytes = 0u;
+                --m_vif1PendingPath2ImageQwc;
+                if (m_vif1PendingPath2ImageQwc == 0u)
+                {
+                    m_vif1PendingPath2DirectHl = false;
+                    m_vif1PendingPath2ImageEop = false;
+                    m_vif1PendingPath2ImageFlg = kGifFmtImage;
+                }
+                continue;
+            }
+
+            const uint32_t availableQw = (sizeBytes - pos) / 16u;
+            if (availableQw == 0u)
+            {
+                // All bytes were transferred even though the current GIF
+                // quadword needs more data from a later DMA packet.
+                m_vif1PendingPath2ImagePartialBytes = sizeBytes - pos;
+                std::memcpy(m_vif1PendingPath2ImagePartial.data(), data + pos,
+                            m_vif1PendingPath2ImagePartialBytes);
+                pos = sizeBytes;
+                break;
+            }
+
+            const uint32_t chunkQw = std::min<uint32_t>(m_vif1PendingPath2ImageQwc, availableQw);
+            std::vector<uint8_t> imagePacket(16u + static_cast<size_t>(chunkQw) * 16u, 0u);
+            const uint64_t imageTag =
+                static_cast<uint64_t>(chunkQw & 0x7FFFu) |
+                ((m_vif1PendingPath2ImageQwc == chunkQw && m_vif1PendingPath2ImageEop)
+                     ? (1ull << 15u) : 0ull) |
+                (static_cast<uint64_t>(m_vif1PendingPath2ImageFlg) << 58);
+            std::memcpy(imagePacket.data(), &imageTag, sizeof(imageTag));
+            std::memcpy(imagePacket.data() + 16u, data + pos, static_cast<size_t>(chunkQw) * 16u);
+            submitGifPacket(GifPathId::Path2, imagePacket.data(), static_cast<uint32_t>(imagePacket.size()), true, m_vif1PendingPath2DirectHl);
+
+            pos += chunkQw * 16u;
+            m_vif1PendingPath2ImageQwc -= chunkQw;
+            if (m_vif1PendingPath2ImageQwc == 0u)
+            {
+                m_vif1PendingPath2DirectHl = false;
+                m_vif1PendingPath2ImageEop = false;
+                m_vif1PendingPath2ImageFlg = kGifFmtImage;
+            }
+            continue;
         }
 
         uint32_t cmd;

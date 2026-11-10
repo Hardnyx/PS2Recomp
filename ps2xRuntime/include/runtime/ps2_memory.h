@@ -416,6 +416,11 @@ public:
     uint32_t m_vif1PendingPath2ImageQwc = 0u;
     bool m_vif1PendingPath2ImageEop = false;
     uint8_t m_vif1PendingPath2ImageFlg = 2u;
+    // Component replays may append raw IMAGE bytes after a short DIRECT;
+    // normal DMAC transfers accept only payloads declared by DIRECT.
+    std::array<uint8_t, 16> m_vif1PendingPath2ImagePartial{};
+    uint32_t m_vif1PendingPath2ImagePartialBytes = 0u;
+    bool m_vif1PendingPath2DirectHl = false;
 
     // VIF1 DMA chains can split a fixed-width VIFcode payload across
     // transport qwords. Retain it until complete, never decode its words
