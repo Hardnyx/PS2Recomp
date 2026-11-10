@@ -1,0 +1,82 @@
+name: Public VU reference regression
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'CMakeLists.txt'
+      - 'ps2xRuntime/**'
+      - 'ps2xTest/**'
+      - 'ps2xIOP/**'
+      - 'ps2xRecomp/**'
+      - 'ps2xAnalyzer/**'
+      - '.github/workflows/vu-component.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ps2recomp-vu-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  kzvu-reference:
+    name: VU1 KZVU reference tests
+    if: ${{ github.event.repository.private == false }}
+    runs-on: windows-2022
+    timeout-minutes: 40
+    steps:
+      - name: Check out public PS2Recomp
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Check out pinned KZVU sources
+        uses: actions/checkout@v4
+        with:
+          repository: drakolordx7/KillzoneRecomp
+          ref: 63917763d68532048edbabc9e7d6d01c9738e55a
+          path: kz-sources
+          persist-credentials: false
+          filter: blob:none
+          sparse-checkout: ext/kzvu
+
+      - name: Check out pinned PCSX2 sources
+        uses: actions/checkout@v4
+        with:
+          repository: PCSX2/pcsx2
+          ref: 646df006a4688063e56c0826e7ea4b8bb0c112c4
+          path: pcsx2-source
+          persist-credentials: false
+          filter: blob:none
+          sparse-checkout: |
+            common
+            pcsx2
+            3rdparty/fmt
+            3rdparty/fast_float
+            3rdparty/include
+
+      - uses: lukka/get-cmake@latest
+
+      - uses: TheMrMilchmann/setup-msvc-dev@v4
+        with:
+          arch: x64
+
+      - name: Configure component tests
+        shell: pwsh
+        run: |
+          $kzvu = Join-Path $env:GITHUB_WORKSPACE 'kz-sources\ext\kzvu'
+          $pcsx2 = Join-Path $env:GITHUB_WORKSPACE 'pcsx2-source'
+          cmake -S . -B out/ci-kzvu -DPS2X_BUILD_STUDIO=OFF -DPS2X_ENABLE_FFMPEG=OFF -DPS2X_ENABLE_KZVU_VU1=ON "-DPS2X_KZVU_SOURCE_DIR=$kzvu" "-DKZVU_PCSX2_DIR=$pcsx2" -DKZVU_BUILD_TEST=OFF
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+
+      - name: Build component tests
+        shell: cmd
+        run: cmake --build out\ci-kzvu --config Release --target ps2x_tests --parallel 2
+
+      - name: Run component tests
+        shell: pwsh
+        run: |
+          & .\out\ci-kzvu\ps2xTest\Release\ps2x_tests.exe
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }

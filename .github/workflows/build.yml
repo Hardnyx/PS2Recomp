@@ -1,9 +1,30 @@
 name: build
 
-on: [push, pull_request]
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'CMakeLists.txt'
+      - 'ps2x*/**'
+      - '.github/workflows/build.yml'
+  pull_request:
+    paths:
+      - 'CMakeLists.txt'
+      - 'ps2x*/**'
+      - '.github/workflows/build.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ps2recomp-build-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
   linux-gcc-clang:
+    if: ${{ github.event.repository.private == false }}
+    timeout-minutes: 35
     strategy:
       fail-fast: false
       matrix:
@@ -39,6 +60,8 @@ jobs:
         run: ./build/ps2xTest/ps2x_tests
 
   windows-msvc:
+    if: ${{ github.event.repository.private == false }}
+    timeout-minutes: 35
     strategy:
       fail-fast: false
       matrix:
