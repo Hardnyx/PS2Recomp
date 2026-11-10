@@ -2854,152 +2854,192 @@ void register_ps2_memory_tests()
                      "polling again must not requeue the completed DMAC interrupt");
         });
 
-        tc.Run("VIF1 PATH2 IMAGE continuation retains original GIF flags", [](TestCase &t)
+        tc.Run("VIF1 PATH2 IMAGE continuation preserves VIF control commands and GIF flags", [](TestCase &t)
         {
             constexpr uint32_t kChannel = 0x10009000u;
             constexpr uint32_t kDStat = 0x1000E010u;
             constexpr uint32_t kSource = 0x00023F00u;
-            for (const bool partialImage : {false, true})
+            for (const bool splitDirect : {false, true})
             {
                 for (const bool eop : {false, true})
                 {
-                  for (const uint8_t flg : {uint8_t{GIF_FMT_IMAGE}, uint8_t{3u}})
-                  {
-                    PS2Memory mem;
-                    t.IsTrue(mem.initialize(), "IMAGE EOP continuation fixture should initialize");
-                    const uint8_t opcode = partialImage ? 0x50u : 0x51u;
-                    std::vector<uint8_t> stream;
-                    if (!partialImage)
+                    for (const uint8_t flg : {uint8_t{GIF_FMT_IMAGE}, uint8_t{3u}})
                     {
-                        // Put DIRECTHL in the last word of the first DMA.
-                        for (uint32_t i = 0u; i < 3u; ++i)
-                            appendU32(stream, 0u);
-                    }
-                    appendU32(stream, makeVifCmd(opcode, 0u, 1u));
-                    appendU64(stream, makeGifTag(1u, flg, 0u, eop));
-                    appendU64(stream, 0u);
-                    const size_t imageOffset = stream.size();
-                    for (uint32_t i = 0u; i < 16u; ++i)
-                        stream.push_back(static_cast<uint8_t>(0x80u + i));
-                    appendU32(stream, makeVifCmd(0x07u, 0u, 0x7788u));
-                    while ((stream.size() & 15u) != 0u)
-                        stream.push_back(0u);
-                    std::memcpy(mem.getRDRAM() + kSource, stream.data(),
-                                stream.size());
-
-                    std::vector<std::vector<uint8_t>> packets;
-                    mem.setGifPacketCallback([&](const uint8_t *data, uint32_t count)
-                    {
-                        packets.emplace_back(data, data + count);
-                    });
-
-                    const uint32_t parts = partialImage ? 2u : 4u;
-                    for (uint32_t part = 0u; part < parts; ++part)
-                    {
-                        const uint32_t offset = partialImage ? part * 32u : part * 16u;
-                        const uint32_t qwc = partialImage ? (part == 0u ? 2u : 1u) : 1u;
-                        mem.writeIORegister(kChannel + 0x10u, kSource + offset);
-                        mem.writeIORegister(kChannel + 0x20u, qwc);
-                        mem.writeIORegister(kChannel, 0x100u);
-                        t.Equals(mem.readIORegister(kChannel + 0x20u), 0u,
-                                 "the IMAGE transport must clear QWC");
-                        t.IsTrue((mem.readIORegister(kDStat) & 2u) != 0u,
-                                 "the IMAGE transport must signal DMA completion");
-                        mem.write32(kDStat, 2u);
-                    }
-
-                    t.Equals(packets.size(), static_cast<size_t>(2u),
-                             "IMAGE tag and continuation must each dispatch exactly once");
-                    if (packets.size() == 2u)
-                    {
-                        t.Equals(packets[1].size(), static_cast<size_t>(32u),
-                                 "the reconstructed packet must contain one IMAGE quadword");
-                        if (packets[1].size() == 32u)
+                        PS2Memory mem;
+                        t.IsTrue(mem.initialize(), "PATH2 IMAGE continuation should initialize");
+                        std::vector<std::vector<uint8_t>> packets;
+                        mem.setGifPacketCallback([&](const uint8_t *data, uint32_t count)
                         {
-                            uint64_t finalTag = 0u;
-                            std::memcpy(&finalTag, packets[1].data(), sizeof(finalTag));
-                            t.Equals((finalTag & (1ull << 15u)) != 0ull, eop,
-                                     "reconstructed IMAGE EOP must match its original GIFtag");
-                            t.Equals(static_cast<uint8_t>((finalTag >> 58u) & 3ull), flg,
-                                     "reconstructed IMAGE FLG must retain the source format");
-                            t.IsTrue(std::memcmp(packets[1].data() + 16u,
-                                                 stream.data() + imageOffset, 16u) == 0,
-                                     "IMAGE continuation must preserve the source bytes");
+                            packets.emplace_back(data, data + count);
+                        });
+                        const auto send = [&](const uint32_t *words, uint32_t qwc)
+                        {
+                            std::memcpy(mem.getRDRAM() + kSource, words, qwc * 16u);
+                            mem.writeIORegister(kChannel + 0x10u, kSource);
+                            mem.writeIORegister(kChannel + 0x20u, qwc);
+                            mem.writeIORegister(kChannel, 0x100u);
+                            t.Equals(mem.readIORegister(kChannel + 0x20u), 0u,
+                                     "the VIF1 transport must finish each DMA");
+                            t.Equals(mem.readIORegister(kChannel) & 0x100u, 0u,
+                                     "the VIF1 transport must clear STR");
+                            t.IsTrue((mem.readIORegister(kDStat) & 2u) != 0u,
+                                     "each DMA must signal its completion");
+                            t.Equals(mem.consumeCompletedDmacCauses().size(),
+                                     static_cast<size_t>(1u),
+                                     "each DMA must queue exactly one completion");
+                            mem.write32(kDStat, 2u);
+                        };
+                        const uint32_t initialDirect =
+                            makeVifCmd(splitDirect ? 0x51u : 0x50u, 0u, 1u);
+                        const uint64_t imageTag = makeGifTag(1u, flg, 0u, eop);
+                        if (splitDirect)
+                        {
+                            const uint32_t header[] = {0u, 0u, 0u, initialDirect};
+                            send(header, 1u);
+                            t.Equals(packets.size(), static_cast<size_t>(0u),
+                                     "a split DIRECT cannot emit an incomplete GIFtag");
+                            uint32_t tagAndCommands[8]{};
+                            std::memcpy(tagAndCommands, &imageTag, sizeof(imageTag));
+                            tagAndCommands[4] = makeVifCmd(0x07u, 0u, 0x1357u);
+                            tagAndCommands[5] = makeVifCmd(0x01u, 0u, 0x0201u);
+                            send(tagAndCommands, 2u);
                         }
+                        else
+                        {
+                            uint32_t tagAndCommands[8]{};
+                            tagAndCommands[0] = initialDirect;
+                            std::memcpy(reinterpret_cast<uint8_t *>(tagAndCommands) + 4u,
+                                        &imageTag, sizeof(imageTag));
+                            tagAndCommands[5] = makeVifCmd(0x07u, 0u, 0x1357u);
+                            tagAndCommands[6] = makeVifCmd(0x01u, 0u, 0x0201u);
+                            send(tagAndCommands, 2u);
+                        }
+                        t.Equals(mem.vif1_regs.mark, 0x1357u,
+                                 "MARK between DIRECT commands must execute as a VIFcode");
+                        t.Equals(mem.vif1_regs.cycle, 0x0201u,
+                                 "STCYCL between DIRECT commands must update VIF state");
+                        t.Equals(packets.size(), static_cast<size_t>(1u),
+                                 "the initial DIRECT must forward the IMAGE tag");
+
+                        uint32_t continuation[8]{};
+                        continuation[0] = makeVifCmd(splitDirect ? 0x50u : 0x51u, 0u, 1u);
+                        uint8_t imageBytes[16]{};
+                        for (uint32_t i = 0u; i < 16u; ++i)
+                            imageBytes[i] = static_cast<uint8_t>(0x80u + i);
+                        std::memcpy(reinterpret_cast<uint8_t *>(continuation) + 4u,
+                                    imageBytes, sizeof(imageBytes));
+                        continuation[5] = makeVifCmd(0x07u, 0u, 0x7788u);
+                        send(continuation, 2u);
+
+                        t.Equals(packets.size(), static_cast<size_t>(2u),
+                                 "the next DIRECT must emit exactly one IMAGE continuation");
+                        if (packets.size() == 2u)
+                        {
+                            t.Equals(packets[1].size(), static_cast<size_t>(32u),
+                                     "the IMAGE continuation must include a synthetic tag");
+                            if (packets[1].size() == 32u)
+                            {
+                                uint64_t tag = 0u;
+                                std::memcpy(&tag, packets[1].data(), sizeof(tag));
+                                t.Equals((tag & 0x7FFFu), 1ull,
+                                         "the continuation must contain one IMAGE quadword");
+                                t.Equals(((tag >> 15u) & 1ull) != 0ull, eop,
+                                         "IMAGE EOP must match the original GIFtag");
+                                t.Equals(static_cast<uint8_t>((tag >> 58u) & 3ull), flg,
+                                         "IMAGE FLG must match the original GIFtag");
+                                t.IsTrue(std::memcmp(packets[1].data() + 16u,
+                                                     imageBytes, sizeof(imageBytes)) == 0,
+                                         "the second DIRECT must preserve image bytes");
+                            }
+                        }
+                        t.Equals(mem.vif1_regs.mark, 0x7788u,
+                                 "MARK following the continuation must execute");
                     }
-                    t.Equals(mem.vif1_regs.mark, 0x7788u,
-                             "MARK after IMAGE must execute without consuming image data");
-                    t.Equals(mem.consumeCompletedDmacCauses().size(),
-                             static_cast<size_t>(parts),
-                             "every IMAGE transport must complete exactly once");
-                  }
                 }
             }
         });
 
-        tc.Run("VIF1 DMA completes when raw GIF IMAGE spans two transports", [](TestCase &t)
+        tc.Run("VIF1 IMAGE continuation spans DIRECT commands and returns to GIFtag parsing", [](TestCase &t)
         {
             PS2Memory mem;
-            t.IsTrue(mem.initialize(), "PATH2 IMAGE split-DMA fixture should initialize");
+            t.IsTrue(mem.initialize(), "multi-DIRECT IMAGE fixture should initialize");
             constexpr uint32_t kChannel = 0x10009000u;
-            constexpr uint32_t kDStat = 0x1000E010u;
             constexpr uint32_t kSource = 0x00023E00u;
-            uint8_t *ram = mem.getRDRAM();
-            std::memset(ram + kSource, 0, 48u);
-
-            const uint32_t direct = makeVifCmd(0x50u, 0u, 1u);
-            const uint64_t imageTag = makeGifTag(1u, GIF_FMT_IMAGE, 0u, true);
-            std::memcpy(ram + kSource, &direct, sizeof(direct));
-            std::memcpy(ram + kSource + 4u, &imageTag, sizeof(imageTag));
-            for (uint32_t i = 0u; i < 12u; ++i)
-                ram[kSource + 20u + i] = static_cast<uint8_t>(0xA0u + i);
-            for (uint32_t i = 0u; i < 4u; ++i)
-                ram[kSource + 32u + i] = static_cast<uint8_t>(0xACu + i);
-            const uint32_t mark = makeVifCmd(0x07u, 0u, 0x7788u);
-            std::memcpy(ram + kSource + 36u, &mark, sizeof(mark));
-
             std::vector<std::vector<uint8_t>> packets;
-            mem.setGifPacketCallback([&](const uint8_t *bytes, uint32_t count)
+            mem.setGifPacketCallback([&](const uint8_t *data, uint32_t count)
             {
-                packets.emplace_back(bytes, bytes + count);
+                packets.emplace_back(data, data + count);
             });
-
-            mem.writeIORegister(kChannel + 0x10u, kSource);
-            mem.writeIORegister(kChannel + 0x20u, 2u);
-            mem.writeIORegister(kChannel, 0x100u);
-            t.Equals(packets.size(), static_cast<size_t>(1u),
-                     "DIRECT must send the IMAGE tag before raw data completes");
-            t.Equals(mem.readIORegister(kChannel + 0x20u), 0u,
-                     "the first DMA must consume its partial IMAGE bytes");
-            t.Equals(mem.readIORegister(kChannel) & 0x100u, 0u,
-                     "the first DMA must clear STR with partial IMAGE data");
-            t.IsTrue((mem.readIORegister(kDStat) & 2u) != 0u,
-                     "DMAC must complete independently of pending raw IMAGE data");
-            mem.write32(kDStat, 2u);
-
-            mem.writeIORegister(kChannel + 0x10u, kSource + 32u);
-            mem.writeIORegister(kChannel + 0x20u, 1u);
-            mem.writeIORegister(kChannel, 0x100u);
-            t.Equals(packets.size(), static_cast<size_t>(2u),
-                     "the next DMA must assemble exactly one IMAGE quadword");
-            if (packets.size() == 2u)
+            const auto send = [&](const uint32_t *words, uint32_t qwc)
             {
-                t.Equals(packets[1].size(), static_cast<size_t>(32u),
-                         "the IMAGE continuation packet needs tag and payload");
-                if (packets[1].size() == 32u)
-                {
-                    bool byteOrderOk = true;
-                    for (uint32_t i = 0u; i < 16u; ++i)
-                        byteOrderOk &= packets[1][i + 16u] == static_cast<uint8_t>(0xA0u + i);
-                    t.IsTrue(byteOrderOk, "PATH2 IMAGE must preserve payload byte order");
-                }
+                std::memcpy(mem.getRDRAM() + kSource, words, qwc * 16u);
+                mem.writeIORegister(kChannel + 0x10u, kSource);
+                mem.writeIORegister(kChannel + 0x20u, qwc);
+                mem.writeIORegister(kChannel, 0x100u);
+                t.Equals(mem.readIORegister(kChannel + 0x20u), 0u,
+                         "each DIRECT-bearing DMA must complete");
+            };
+            uint32_t header[8]{};
+            header[0] = makeVifCmd(0x50u, 0u, 1u);
+            const uint64_t tag = makeGifTag(2u, GIF_FMT_IMAGE, 0u, true);
+            std::memcpy(reinterpret_cast<uint8_t *>(header) + 4u, &tag, sizeof(tag));
+            header[5] = makeVifCmd(0x07u, 0u, 0x1111u);
+            send(header, 2u);
+            t.Equals(mem.vif1_regs.mark, 0x1111u,
+                     "initial IMAGE tag must not absorb the following MARK");
+
+            uint32_t middle[8]{};
+            middle[0] = makeVifCmd(0x51u, 0u, 1u);
+            uint8_t firstImage[16]{};
+            uint8_t lastImage[16]{};
+            for (uint32_t i = 0u; i < 16u; ++i)
+            {
+                firstImage[i] = static_cast<uint8_t>(0x40u + i);
+                lastImage[i] = static_cast<uint8_t>(0x60u + i);
             }
-            t.Equals(mem.read32(0x10003C30u), 0x7788u,
-                     "a trailing VIF MARK must decode after IMAGE completion");
-            t.Equals(mem.readIORegister(kChannel + 0x20u), 0u,
-                     "the second DMA must clear QWC after the marker");
-            t.IsTrue((mem.readIORegister(kDStat) & 2u) != 0u,
-                     "the second DMA must raise its own completion");
+            std::memcpy(reinterpret_cast<uint8_t *>(middle) + 4u,
+                        firstImage, sizeof(firstImage));
+            middle[5] = makeVifCmd(0x07u, 0u, 0x2222u);
+            send(middle, 2u);
+            t.Equals(mem.vif1_regs.mark, 0x2222u,
+                     "MARK between IMAGE chunks must execute");
+            t.Equals(packets.size(), static_cast<size_t>(2u),
+                     "one GIFtag and the first IMAGE chunk must have been delivered");
+
+            uint32_t ending[12]{};
+            ending[0] = makeVifCmd(0x50u, 0u, 2u);
+            std::memcpy(reinterpret_cast<uint8_t *>(ending) + 4u,
+                        lastImage, sizeof(lastImage));
+            const uint64_t nextTag = makeGifTag(0u, GIF_FMT_PACKED, 1u, false);
+            std::memcpy(reinterpret_cast<uint8_t *>(ending) + 20u,
+                        &nextTag, sizeof(nextTag));
+            ending[9] = makeVifCmd(0x07u, 0u, 0x3333u);
+            send(ending, 3u);
+            t.Equals(mem.vif1_regs.mark, 0x3333u,
+                     "VIF parsing must resume after the final IMAGE quadword");
+            t.Equals(packets.size(), static_cast<size_t>(4u),
+                     "a later GIFtag must be dispatched after IMAGE completion");
+            if (packets.size() == 4u)
+            {
+                t.Equals(packets[2].size(), static_cast<size_t>(32u),
+                         "the last IMAGE chunk must contain tag and data");
+                if (packets[2].size() == 32u)
+                {
+                    uint64_t finalTag = 0u;
+                    std::memcpy(&finalTag, packets[2].data(), sizeof(finalTag));
+                    t.IsTrue((finalTag & (1ull << 15u)) != 0ull,
+                             "only the last IMAGE chunk must retain EOP");
+                    t.IsTrue(std::memcmp(packets[2].data() + 16u,
+                                         lastImage, sizeof(lastImage)) == 0,
+                             "the last IMAGE chunk must preserve its bytes");
+                }
+                t.Equals(packets[3].size(), static_cast<size_t>(16u),
+                         "the GIFtag following IMAGE must remain independent");
+                if (packets[3].size() == 16u)
+                    t.IsTrue(std::memcmp(packets[3].data(), &nextTag,
+                                         sizeof(nextTag)) == 0,
+                             "the next GIFtag must not be treated as IMAGE data");
+            }
         });
 
         tc.Run("VIF1 DMA DIRECT forwards payload to GIF callback and clears channel", [](TestCase &t)

@@ -332,8 +332,6 @@ bool PS2Memory::initialize(size_t ramSize)
     m_vif1PendingPath2ImageQwc = 0u;
     m_vif1PendingPath2ImageEop = false;
     m_vif1PendingPath2ImageFlg = 2u;
-    m_vif1PendingPath2ImagePartialBytes = 0u;
-    m_vif1PendingPath2DirectHl = false;
     m_vif1PendingRegister = Vif1PendingRegister::None;
     m_vif1PendingRegisterBytes = 0u;
     m_vif1PendingRegisterIrq = false;
@@ -1303,8 +1301,6 @@ bool PS2Memory::writeIORegister(uint32_t address, uint32_t value)
                 m_vif1PendingPath2ImageQwc = 0u;
                 m_vif1PendingPath2ImageEop = false;
                 m_vif1PendingPath2ImageFlg = 2u;
-                m_vif1PendingPath2ImagePartialBytes = 0u;
-                m_vif1PendingPath2DirectHl = false;
                 m_vif1PendingRegister = Vif1PendingRegister::None;
                 m_vif1PendingRegisterBytes = 0u;
                 m_vif1PendingRegisterIrq = false;
