@@ -534,6 +534,16 @@ are not yet modeled.
 
 ### Interrupt-driven VIF1 DMA suspension
 
+The pinned PCSX2 VIF1 interrupt handler treats MARK (opcode 0x07)
+specially: its I-bit latches INT but does not assert VIS or suspend
+DMA. The parser now uses a per-command DMA stall request instead of
+treating the sticky STAT.INT bit as an unconditional stall. This
+avoids falsely stalling after the next ordinary opcode following
+an interrupting MARK. Existing pause/resume tests use I-bit STCYCL
+or STMOD as genuine stalling commands, and a dedicated MARK regression
+checks INT without VIS, uninterrupted DMA completion and STC
+acknowledgement. INTC_VIF1 cause delivery is still not implemented.
+
 This candidate tracks how many bytes of a normal or chained VIF1
 DMA transfer have been consumed. A completed, unmasked I-bit VIFcode
 raises VIF1_STAT.INT and VIS during DMA parsing; the interpreter

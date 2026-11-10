@@ -308,6 +308,17 @@ uint32_t PS2Memory::processVIF1DataImpl(const uint8_t *data, uint32_t sizeBytes,
 
     uint32_t pos = 0;
 
+    // Unlike other I-bit VIFcodes, MARK raises INT without suspending
+    // DMA. Snapshot the interrupting command, not the sticky STAT.INT:
+    // otherwise a later ordinary opcode can trigger a false VIS stall.
+    const auto publishVif1Interrupt = [&]()
+    {
+        vif1_regs.stat |= (1u << 11u);
+        if (m_vif1DmaProcessing &&
+            ((vif1_regs.code >> 24u) & 0x7Fu) != VIF_MARK)
+            m_vif1DmaStallRequested = true;
+    };
+
     if (m_vif1PendingUnpackBytes != 0u)
     {
         // Preserve the original command and its decoding parameters.
@@ -361,7 +372,7 @@ uint32_t PS2Memory::processVIF1DataImpl(const uint8_t *data, uint32_t sizeBytes,
         m_vif1PendingDirectPayload.clear();
         m_vif1PendingDirectHl = false;
         if (m_vif1PendingDirectIrq)
-            vif1_regs.stat |= (1u << 11);
+            publishVif1Interrupt();
         m_vif1PendingDirectIrq = false;
     }
 
@@ -394,7 +405,7 @@ uint32_t PS2Memory::processVIF1DataImpl(const uint8_t *data, uint32_t sizeBytes,
         m_vif1PendingRegister = Vif1PendingRegister::None;
         m_vif1PendingRegisterBytes = 0u;
         if (m_vif1PendingRegisterIrq)
-            vif1_regs.stat |= (1u << 11);
+            publishVif1Interrupt();
         m_vif1PendingRegisterIrq = false;
     }
 
@@ -419,7 +430,7 @@ uint32_t PS2Memory::processVIF1DataImpl(const uint8_t *data, uint32_t sizeBytes,
         if (m_vif1PendingMpgBytes != 0u)
             return pos;
         if (m_vif1PendingMpgIrq)
-            vif1_regs.stat |= (1u << 11);
+            publishVif1Interrupt();
         m_vif1PendingMpgIrq = false;
     }
 
@@ -435,7 +446,7 @@ uint32_t PS2Memory::processVIF1DataImpl(const uint8_t *data, uint32_t sizeBytes,
 
     while (pos + 4 <= sizeBytes)
     {
-        if (m_vif1DmaProcessing && (vif1_regs.stat & (1u << 11u)) != 0u)
+        if (m_vif1DmaProcessing && m_vif1DmaStallRequested)
         {
             vif1_regs.stat |= (1u << 10u); // VIS: interrupted VIF1 DMA
             break;
@@ -530,7 +541,7 @@ uint32_t PS2Memory::processVIF1DataImpl(const uint8_t *data, uint32_t sizeBytes,
                                 opcode == VIF_DIRECT || opcode == VIF_DIRECTHL ||
                                 (opcode & 0x60u) == 0x60u;
         if (irq && !hasPayload)
-            vif1_regs.stat |= (1u << 11); // INT
+            publishVif1Interrupt(); // INT
 
         if (opcode == VIF_NOP)
         {
@@ -634,7 +645,7 @@ uint32_t PS2Memory::processVIF1DataImpl(const uint8_t *data, uint32_t sizeBytes,
             std::memcpy(&vif1_regs.mask, data + pos, 4u);
             pos += 4u;
             if (irq)
-                vif1_regs.stat |= (1u << 11);
+                publishVif1Interrupt();
             continue;
         }
         else if (opcode == VIF_STROW)
@@ -647,7 +658,7 @@ uint32_t PS2Memory::processVIF1DataImpl(const uint8_t *data, uint32_t sizeBytes,
             std::memcpy(vif1_regs.row, data + pos, 16u);
             pos += 16u;
             if (irq)
-                vif1_regs.stat |= (1u << 11);
+                publishVif1Interrupt();
             continue;
         }
         else if (opcode == VIF_STCOL)
@@ -660,7 +671,7 @@ uint32_t PS2Memory::processVIF1DataImpl(const uint8_t *data, uint32_t sizeBytes,
             std::memcpy(vif1_regs.col, data + pos, 16u);
             pos += 16u;
             if (irq)
-                vif1_regs.stat |= (1u << 11);
+                publishVif1Interrupt();
             continue;
         }
         else if (opcode == VIF_MPG)
@@ -679,7 +690,7 @@ uint32_t PS2Memory::processVIF1DataImpl(const uint8_t *data, uint32_t sizeBytes,
                 break;
             }
             if (irq)
-                vif1_regs.stat |= (1u << 11);
+                publishVif1Interrupt();
             continue;
         }
         else if (opcode == VIF_DIRECT || opcode == VIF_DIRECTHL)
@@ -703,7 +714,7 @@ uint32_t PS2Memory::processVIF1DataImpl(const uint8_t *data, uint32_t sizeBytes,
             submitDirectPayload(data + pos, expectedBytes, directHl);
             pos += expectedBytes;
             if (irq)
-                vif1_regs.stat |= (1u << 11);
+                publishVif1Interrupt();
             continue;
         }
         else if ((opcode & 0x60) == 0x60)
@@ -780,7 +791,7 @@ uint32_t PS2Memory::processVIF1DataImpl(const uint8_t *data, uint32_t sizeBytes,
             // This branch executes for both one-shot and reassembled
             // UNPACK commands. A partial payload must not set INT.
             if (irq)
-                vif1_regs.stat |= (1u << 11);
+                publishVif1Interrupt();
 
             if (m_vu1Data && totalBytes > 0u)
             {
@@ -1012,7 +1023,7 @@ uint32_t PS2Memory::processVIF1DataImpl(const uint8_t *data, uint32_t sizeBytes,
 
     // Also stall when the interrupting command ends at the final byte
     // of this DMA chunk. Leave CHCR.STR and D_STAT pending until STC.
-    if (m_vif1DmaProcessing && (vif1_regs.stat & (1u << 11u)) != 0u)
+    if (m_vif1DmaProcessing && m_vif1DmaStallRequested)
         vif1_regs.stat |= (1u << 10u); // VIS
     return pos;
 }

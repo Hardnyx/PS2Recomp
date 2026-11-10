@@ -734,7 +734,42 @@ void register_ps2_memory_tests()
                      "reset should not undo an already transferred microprogram word");
         });
 
-        tc.Run("VIF1 DMA pauses after I-bit MARK and resumes on FBRST.STC", [](TestCase &t)
+        tc.Run("VIF1 I-bit MARK raises INT without stalling DMA", [](TestCase &t)
+        {
+            PS2Memory mem;
+            t.IsTrue(mem.initialize(), "MARK interrupt exception fixture should initialize");
+            constexpr uint32_t kChannel = 0x10009000u;
+            constexpr uint32_t kDStat = 0x1000E010u;
+            constexpr uint32_t kSource = 0x0002CA00u;
+            constexpr uint32_t kInt = 1u << 11u;
+            constexpr uint32_t kVis = 1u << 10u;
+            const uint32_t words[] = {
+                makeVifCmd(0x07u, 0u, 0x1111u) | 0x80000000u,
+                makeVifCmd(0x07u, 0u, 0x2222u), 0u, 0u
+            };
+            std::memcpy(mem.getRDRAM() + kSource, words, sizeof(words));
+            mem.writeIORegister(kChannel + 0x10u, kSource);
+            mem.writeIORegister(kChannel + 0x20u, 1u);
+            mem.writeIORegister(kChannel, 0x100u);
+
+            t.Equals(mem.read32(0x10003C30u), 0x2222u,
+                     "a following MARK must run despite the preceding I-bit MARK");
+            t.Equals(mem.read32(0x10003C00u) & (kInt | kVis), kInt,
+                     "I-bit MARK must latch INT but must not set VIS");
+            t.Equals(mem.readIORegister(kChannel + 0x20u), 0u,
+                     "MARK must not leave DMA QWC pending");
+            t.Equals(mem.readIORegister(kChannel) & 0x100u, 0u,
+                     "MARK must not retain CHCR.STR after normal completion");
+            t.IsTrue((mem.readIORegister(kDStat) & 2u) != 0u,
+                     "MARK-only interrupt must not defer D_STAT completion");
+            t.Equals(mem.consumeCompletedDmacCauses().size(), static_cast<size_t>(1u),
+                     "a MARK-only interrupted DMA completes exactly once");
+            mem.writeIORegister(0x10003C10u, 8u);
+            t.Equals(mem.read32(0x10003C00u) & (kInt | kVis), 0u,
+                     "FBRST.STC must acknowledge MARK.INT without inventing VIS");
+        });
+
+        tc.Run("VIF1 DMA pauses after I-bit STCYCL and resumes on FBRST.STC", [](TestCase &t)
         {
             PS2Memory mem;
             t.IsTrue(mem.initialize(), "DMA interrupt stall fixture should initialize");
@@ -743,8 +778,9 @@ void register_ps2_memory_tests()
             constexpr uint32_t kFbrst = 0x10003C10u;
             constexpr uint32_t kSource = 0x0002C400u;
             const uint32_t words[][4] = {
-                {makeVifCmd(0x07u, 0u, 0x1111u) | 0x80000000u,
-                 makeVifCmd(0x07u, 0u, 0x2222u), 0u, 0u},
+                {makeVifCmd(0x07u, 0u, 0x1111u),
+                 makeVifCmd(0x01u, 0u, 0x0101u) | 0x80000000u,
+                 makeVifCmd(0x07u, 0u, 0x2222u), 0u},
                 {makeVifCmd(0x07u, 0u, 0x3333u), 0u, 0u, 0u}
             };
             std::memcpy(mem.getRDRAM() + kSource, words, sizeof(words));
@@ -755,7 +791,7 @@ void register_ps2_memory_tests()
             constexpr uint32_t kInt = 1u << 11u;
             constexpr uint32_t kVis = 1u << 10u;
             t.Equals(mem.read32(0x10003C30u), 0x1111u,
-                     "I-bit MARK must execute before the stall");
+                     "MARK must execute before I-bit STCYCL stalls DMA");
             t.Equals(mem.read32(0x10003C00u) & (kVis | kInt), kVis | kInt,
                      "DMA I-bit must publish both INT and VIS");
             t.IsTrue((mem.readIORegister(kChannel) & 0x100u) != 0u,
@@ -836,7 +872,8 @@ void register_ps2_memory_tests()
             uint8_t *rdram = mem.getRDRAM();
             writeDmaTag(rdram, kTag, makeDmaTag(1u, 7u, 0u, false));
             const uint32_t high[] = {
-                0u, makeVifCmd(0x07u, 0u, 0xAAAAu) | 0x80000000u
+                makeVifCmd(0x07u, 0u, 0xAAAAu),
+                makeVifCmd(0x01u, 0u, 0x0101u) | 0x80000000u
             };
             const uint32_t payload[] = {
                 makeVifCmd(0x07u, 0u, 0xBBBBu), 0u, 0u, 0u
@@ -846,7 +883,7 @@ void register_ps2_memory_tests()
             mem.writeIORegister(kChannel + 0x30u, kTag);
             mem.writeIORegister(kChannel, 0x144u); // STR | CHAIN | TTE
             t.Equals(mem.read32(0x10003C30u), 0xAAAAu,
-                     "the I-bit command in tag-high data must execute first");
+                     "the MARK in tag-high data must precede I-bit STCYCL");
             t.IsTrue((mem.read32(0x10003C00u) & (1u << 10u)) != 0u,
                      "interrupt in TTE data must suspend the chain payload");
             t.Equals(mem.readIORegister(kDStat) & 2u, 0u,
@@ -866,9 +903,11 @@ void register_ps2_memory_tests()
             constexpr uint32_t kDStat = 0x1000E010u;
             constexpr uint32_t kSource = 0x0002C700u;
             const uint32_t commands[][4] = {
-                {0u, 0u, 0u, makeVifCmd(0x07u, 0u, 0x1111u) | 0x80000000u},
-                {makeVifCmd(0x07u, 0u, 0x2222u) | 0x80000000u,
-                 makeVifCmd(0x07u, 0u, 0x3333u), 0u, 0u}
+                {0u, makeVifCmd(0x07u, 0u, 0x1111u), 0u,
+                 makeVifCmd(0x01u, 0u, 0x0101u) | 0x80000000u},
+                {makeVifCmd(0x07u, 0u, 0x2222u),
+                 makeVifCmd(0x05u, 0u, 0u) | 0x80000000u,
+                 makeVifCmd(0x07u, 0u, 0x3333u), 0u}
             };
             std::memcpy(mem.getRDRAM() + kSource, commands, sizeof commands);
             mem.writeIORegister(kChannel + 0x10u, kSource);
@@ -911,7 +950,7 @@ void register_ps2_memory_tests()
             constexpr uint32_t kDStat = 0x1000E010u;
             constexpr uint32_t kSource = 0x0002C800u;
             const uint32_t commands[] = {
-                makeVifCmd(0x07u, 0u, 0x1111u) | 0x80000000u,
+                makeVifCmd(0x01u, 0u, 0x0101u) | 0x80000000u,
                 makeVifCmd(0x07u, 0u, 0x2222u), 0u, 0u
             };
             std::memcpy(mem.getRDRAM() + kSource, commands, sizeof commands);

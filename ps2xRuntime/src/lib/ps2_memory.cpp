@@ -344,6 +344,7 @@ bool PS2Memory::initialize(size_t ramSize)
     m_vif1PendingDirectPayload.clear();
     m_vif1PendingDirectBytes = 0u;
     m_vif1DmaProcessing = false;
+    m_vif1DmaStallRequested = false;
     m_vif1PendingDirectHl = false;
     m_vif1PendingDirectIrq = false;
     resetEeTimers();
@@ -1312,6 +1313,7 @@ bool PS2Memory::writeIORegister(uint32_t address, uint32_t value)
                 m_vif1PendingDirectPayload.clear();
                 m_vif1PendingDirectBytes = 0u;
                 m_vif1DmaProcessing = false;
+                m_vif1DmaStallRequested = false;
                 m_vif1PendingDirectHl = false;
                 m_vif1PendingDirectIrq = false;
                 m_path3Masked = false;
@@ -1942,9 +1944,11 @@ void PS2Memory::processPendingTransfers()
             if (count == 0u)
                 break;
 
+            m_vif1DmaStallRequested = false;
             m_vif1DmaProcessing = true;
             const uint32_t consumed = processVIF1DataImpl(base, count, false, false);
             m_vif1DmaProcessing = false;
+            m_vif1DmaStallRequested = false;
             transfer.consumedBytes += consumed;
 
             if ((vif1_regs.stat & (1u << 10u)) != 0u)

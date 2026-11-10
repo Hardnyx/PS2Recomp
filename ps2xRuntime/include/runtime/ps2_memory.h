@@ -446,6 +446,7 @@ public:
     // DMA parsing stops at the first completed, unmasked I-bit command.
     // Direct component/FIFO parsing preserves the existing full-buffer path.
     bool m_vif1DmaProcessing = false;
+    bool m_vif1DmaStallRequested = false;
     bool m_vif1PendingDirectHl = false;
     bool m_vif1PendingDirectIrq = false;
     std::vector<std::vector<uint8_t>> m_path3MaskedFifo;
