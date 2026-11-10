@@ -359,10 +359,21 @@ Fork commit `dce5c4f` corrects the test to observe QWC and D_STAT
 at the actual callback boundary; this is a test correction, not an
 asynchronous DMA implementation.
 
-This fix is limited to the three fixed-width commands. It does not
-introduce complete streaming state for MPG, UNPACK, DIRECT or other
-variable-length VIFcodes. Those still require independent split-chain
-tests and a hardware/reference comparison before changing DMA timing.
+Follow-up candidate `933a4b5` also resumes partial `MPG` uploads,
+which supply the VU1 microprogram memory. It tracks the remaining
+instruction bytes and destination address across separate DMA packets,
+copies each fragment within the existing 16-KiB code-window bounds,
+and invalidates the VU1 code cache for every copied fragment.
+`VIF1_FBRST.RST` cancels the outstanding upload. The regression
+sends two real normal-mode VIF1 DMA packets with an instruction split
+between them and a subsequent MARK command; a separate case checks
+reset cancellation. Port commit `de74f31` selects this revision in
+[Windows run 42727047294](https://github.com/Hardnyx/TekkenTagPort/actions/runs/42727047294).
+
+The remaining streaming gaps include UNPACK, DIRECT and other
+variable-length VIFcodes. These require separate split-chain tests,
+hardware/reference comparison, and asynchronous DMA qualification
+before altering runtime timing.
 
 ## Windows regression commands
 
