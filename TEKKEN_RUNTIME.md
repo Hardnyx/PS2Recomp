@@ -541,7 +541,13 @@ returns at that command boundary without decoding any later VIFcodes.
 Pending data stays queued, CHCR.STR remains set and the channel does
 not raise D_STAT or report an EE DMAC completion. FBRST.STC clears
 the stall and synchronously resumes decoding from the saved byte
-offset. Tests exercise a MARK interruption in normal DMA, an I-bit
+offset. The previous DMA-stall regression exposed raw PATH2 IMAGE
+quadwords split by a VIFcode: a 12-byte tail was left unread, keeping
+CHCR.STR/QWC active. The parser now retains those transferred bytes
+and assembles their final quadword when a later DMA provides the
+remainder. A regression checks both DMAC completions, exact image
+bytes and the VIFcode following the image. Tests exercise a MARK
+interruption in normal DMA, an I-bit
 UNPACK with a trailing opcode in the same DMA packet, and a TTE
 DMAtag-high interrupt with an unread chain payload. Additional
 regressions cover an I-bit at the end of a DMA quadword, two stalls

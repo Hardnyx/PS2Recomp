@@ -330,6 +330,7 @@ bool PS2Memory::initialize(size_t ramSize)
     m_path3Masked = false;
     m_path3MaskedFifo.clear();
     m_vif1PendingPath2ImageQwc = 0u;
+    m_vif1PendingPath2ImagePartialBytes = 0u;
     m_vif1PendingPath2DirectHl = false;
     m_vif1PendingRegister = Vif1PendingRegister::None;
     m_vif1PendingRegisterBytes = 0u;
@@ -1297,6 +1298,7 @@ bool PS2Memory::writeIORegister(uint32_t address, uint32_t value)
                 std::memcpy(vif1_regs.row, savedRow, sizeof(savedRow));
                 std::memcpy(vif1_regs.col, savedCol, sizeof(savedCol));
                 m_vif1PendingPath2ImageQwc = 0u;
+                m_vif1PendingPath2ImagePartialBytes = 0u;
                 m_vif1PendingPath2DirectHl = false;
                 m_vif1PendingRegister = Vif1PendingRegister::None;
                 m_vif1PendingRegisterBytes = 0u;

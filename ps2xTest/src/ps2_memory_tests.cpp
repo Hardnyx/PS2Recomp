@@ -2730,6 +2730,71 @@ void register_ps2_memory_tests()
                      "polling again must not requeue the completed DMAC interrupt");
         });
 
+        tc.Run("VIF1 DMA completes when raw GIF IMAGE spans two transports", [](TestCase &t)
+        {
+            PS2Memory mem;
+            t.IsTrue(mem.initialize(), "PATH2 IMAGE split-DMA fixture should initialize");
+            constexpr uint32_t kChannel = 0x10009000u;
+            constexpr uint32_t kDStat = 0x1000E010u;
+            constexpr uint32_t kSource = 0x00023E00u;
+            uint8_t *ram = mem.getRDRAM();
+            std::memset(ram + kSource, 0, 48u);
+
+            const uint32_t direct = makeVifCmd(0x50u, 0u, 1u);
+            const uint64_t imageTag = makeGifTag(1u, GIF_FMT_IMAGE, 0u, true);
+            std::memcpy(ram + kSource, &direct, sizeof(direct));
+            std::memcpy(ram + kSource + 4u, &imageTag, sizeof(imageTag));
+            for (uint32_t i = 0u; i < 12u; ++i)
+                ram[kSource + 20u + i] = static_cast<uint8_t>(0xA0u + i);
+            for (uint32_t i = 0u; i < 4u; ++i)
+                ram[kSource + 32u + i] = static_cast<uint8_t>(0xACu + i);
+            const uint32_t mark = makeVifCmd(0x07u, 0u, 0x7788u);
+            std::memcpy(ram + kSource + 36u, &mark, sizeof(mark));
+
+            std::vector<std::vector<uint8_t>> packets;
+            mem.setGifPacketCallback([&](const uint8_t *bytes, uint32_t count)
+            {
+                packets.emplace_back(bytes, bytes + count);
+            });
+
+            mem.writeIORegister(kChannel + 0x10u, kSource);
+            mem.writeIORegister(kChannel + 0x20u, 2u);
+            mem.writeIORegister(kChannel, 0x100u);
+            t.Equals(packets.size(), static_cast<size_t>(1u),
+                     "DIRECT must send the IMAGE tag before raw data completes");
+            t.Equals(mem.readIORegister(kChannel + 0x20u), 0u,
+                     "the first DMA must consume its partial IMAGE bytes");
+            t.Equals(mem.readIORegister(kChannel) & 0x100u, 0u,
+                     "the first DMA must clear STR with partial IMAGE data");
+            t.IsTrue((mem.readIORegister(kDStat) & 2u) != 0u,
+                     "DMAC must complete independently of pending raw IMAGE data");
+            mem.write32(kDStat, 2u);
+
+            mem.writeIORegister(kChannel + 0x10u, kSource + 32u);
+            mem.writeIORegister(kChannel + 0x20u, 1u);
+            mem.writeIORegister(kChannel, 0x100u);
+            t.Equals(packets.size(), static_cast<size_t>(2u),
+                     "the next DMA must assemble exactly one IMAGE quadword");
+            if (packets.size() == 2u)
+            {
+                t.Equals(packets[1].size(), static_cast<size_t>(32u),
+                         "the IMAGE continuation packet needs tag and payload");
+                if (packets[1].size() == 32u)
+                {
+                    bool byteOrderOk = true;
+                    for (uint32_t i = 0u; i < 16u; ++i)
+                        byteOrderOk &= packets[1][i + 16u] == static_cast<uint8_t>(0xA0u + i);
+                    t.IsTrue(byteOrderOk, "PATH2 IMAGE must preserve payload byte order");
+                }
+            }
+            t.Equals(mem.read32(0x10003C30u), 0x7788u,
+                     "a trailing VIF MARK must decode after IMAGE completion");
+            t.Equals(mem.readIORegister(kChannel + 0x20u), 0u,
+                     "the second DMA must clear QWC after the marker");
+            t.IsTrue((mem.readIORegister(kDStat) & 2u) != 0u,
+                     "the second DMA must raise its own completion");
+        });
+
         tc.Run("VIF1 DMA DIRECT forwards payload to GIF callback and clears channel", [](TestCase &t)
         {
             PS2Memory mem;

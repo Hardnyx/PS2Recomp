@@ -443,9 +443,47 @@ uint32_t PS2Memory::processVIF1DataImpl(const uint8_t *data, uint32_t sizeBytes,
 
         if (m_vif1PendingPath2ImageQwc != 0u)
         {
+            // VIFcodes use four-byte units, while GIF IMAGE uses 16-byte
+            // units. DMAC owns even the tail of a partial IMAGE quadword.
+            if (m_vif1PendingPath2ImagePartialBytes != 0u)
+            {
+                const uint32_t needed = 16u - m_vif1PendingPath2ImagePartialBytes;
+                const uint32_t copied = std::min(needed, sizeBytes - pos);
+                std::memcpy(m_vif1PendingPath2ImagePartial.data() +
+                                m_vif1PendingPath2ImagePartialBytes,
+                            data + pos, copied);
+                m_vif1PendingPath2ImagePartialBytes += copied;
+                pos += copied;
+                if (m_vif1PendingPath2ImagePartialBytes != 16u)
+                    break;
+
+                std::array<uint8_t, 32> packet{};
+                const uint64_t imageTag =
+                    1ull |
+                    ((m_vif1PendingPath2ImageQwc == 1u) ? (1ull << 15u) : 0ull) |
+                    (static_cast<uint64_t>(kGifFmtImage) << 58u);
+                std::memcpy(packet.data(), &imageTag, sizeof(imageTag));
+                std::memcpy(packet.data() + 16u,
+                            m_vif1PendingPath2ImagePartial.data(), 16u);
+                submitGifPacket(GifPathId::Path2, packet.data(),
+                                static_cast<uint32_t>(packet.size()), true,
+                                m_vif1PendingPath2DirectHl);
+                m_vif1PendingPath2ImagePartialBytes = 0u;
+                --m_vif1PendingPath2ImageQwc;
+                if (m_vif1PendingPath2ImageQwc == 0u)
+                    m_vif1PendingPath2DirectHl = false;
+                continue;
+            }
+
             const uint32_t availableQw = (sizeBytes - pos) / 16u;
             if (availableQw == 0u)
             {
+                // All bytes were transferred even though the current GIF
+                // quadword needs more data from a later DMA packet.
+                m_vif1PendingPath2ImagePartialBytes = sizeBytes - pos;
+                std::memcpy(m_vif1PendingPath2ImagePartial.data(), data + pos,
+                            m_vif1PendingPath2ImagePartialBytes);
+                pos = sizeBytes;
                 break;
             }
 

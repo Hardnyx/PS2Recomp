@@ -414,6 +414,10 @@ public:
     uint8_t *m_vu1Data = nullptr;
     bool m_path3Masked = false;
     uint32_t m_vif1PendingPath2ImageQwc = 0u;
+    // DIRECT can end four bytes into a DMA quadword. Preserve a partial
+    // 16-byte IMAGE continuation until the next DMA supplies its tail.
+    std::array<uint8_t, 16> m_vif1PendingPath2ImagePartial{};
+    uint32_t m_vif1PendingPath2ImagePartialBytes = 0u;
     bool m_vif1PendingPath2DirectHl = false;
 
     // VIF1 DMA chains can split a fixed-width VIFcode payload across
