@@ -424,6 +424,12 @@ public:
     // microinstruction at the boundary of two 16-byte transport blocks.
     uint32_t m_vif1PendingMpgDestination = 0u;
     uint32_t m_vif1PendingMpgBytes = 0u;
+    // A DIRECT/DIRECTHL GIF packet can be divided between DMA blocks, even
+    // in the middle of a quadword. Defer submission until all declared bytes
+    // have arrived, rather than decoding the remainder as VIF instructions.
+    std::vector<uint8_t> m_vif1PendingDirectPayload;
+    uint32_t m_vif1PendingDirectBytes = 0u;
+    bool m_vif1PendingDirectHl = false;
     std::vector<std::vector<uint8_t>> m_path3MaskedFifo;
 
     struct PendingTransfer

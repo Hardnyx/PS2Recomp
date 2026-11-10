@@ -302,6 +302,36 @@ void PS2Memory::processVIF1Data(const uint8_t *data, uint32_t sizeBytes)
 
     uint32_t pos = 0;
 
+    const auto submitDirectPayload = [&](const uint8_t *payload, uint32_t bytes, bool directHl)
+    {
+        submitGifPacket(GifPathId::Path2, payload, bytes, true, directHl);
+        const uint32_t pendingImageQw = pendingGifImageQwc(payload, bytes);
+        if (pendingImageQw != 0u)
+        {
+            m_vif1PendingPath2ImageQwc = pendingImageQw;
+            m_vif1PendingPath2DirectHl = directHl;
+        }
+    };
+
+    // DIRECT/DIRECTHL consumes its declared payload before the next VIFcode.
+    // A fragmented command can end in the middle of a GIF quadword.
+    if (m_vif1PendingDirectBytes != 0u)
+    {
+        const uint32_t available = std::min(m_vif1PendingDirectBytes, sizeBytes);
+        m_vif1PendingDirectPayload.insert(
+            m_vif1PendingDirectPayload.end(), data, data + available);
+        m_vif1PendingDirectBytes -= available;
+        pos = available;
+        if (m_vif1PendingDirectBytes != 0u)
+            return;
+
+        submitDirectPayload(m_vif1PendingDirectPayload.data(),
+                            static_cast<uint32_t>(m_vif1PendingDirectPayload.size()),
+                            m_vif1PendingDirectHl);
+        m_vif1PendingDirectPayload.clear();
+        m_vif1PendingDirectHl = false;
+    }
+
     // A previous VIF1 qword may have ended inside STMASK, STROW or STCOL.
     // Consume that command's remaining payload before reading any new opcode.
     if (m_vif1PendingRegister != Vif1PendingRegister::None)
@@ -550,33 +580,23 @@ void PS2Memory::processVIF1Data(const uint8_t *data, uint32_t sizeBytes)
         }
         else if (opcode == VIF_DIRECT || opcode == VIF_DIRECTHL)
         {
-            uint32_t qwCount = imm;
-            if (qwCount == 0)
-                qwCount = 65536;
-            const uint32_t availableQw = (sizeBytes - pos) / 16u;
-            const bool truncated = qwCount > availableQw;
-            if (qwCount > availableQw)
-                qwCount = availableQw;
-
-            if (qwCount > 0)
+            const uint32_t qwCount = (imm == 0u) ? 65536u : static_cast<uint32_t>(imm);
+            const uint32_t expectedBytes = qwCount * 16u;
+            const uint32_t available = std::min(expectedBytes, sizeBytes - pos);
+            const bool directHl = (opcode == VIF_DIRECTHL);
+            if (available < expectedBytes)
             {
-                const bool directHl = (opcode == VIF_DIRECTHL);
-                submitGifPacket(GifPathId::Path2, data + pos, qwCount * 16, true, directHl);
-
-                const uint32_t pendingImageQw = pendingGifImageQwc(data + pos, qwCount * 16u);
-                if (pendingImageQw != 0u)
-                {
-                    m_vif1PendingPath2ImageQwc = pendingImageQw;
-                    m_vif1PendingPath2DirectHl = directHl;
-                }
-            }
-
-            pos += qwCount * 16;
-            if (truncated)
-            {
-                pos = sizeBytes;
+                // A split packet cannot be submitted as independent GIF
+                // packets: its continuation may be a PACKED/REGLIST payload
+                // or part of the same IMAGE tag, not a new GIFtag.
+                m_vif1PendingDirectPayload.assign(data + pos, data + pos + available);
+                m_vif1PendingDirectBytes = expectedBytes - available;
+                m_vif1PendingDirectHl = directHl;
                 break;
             }
+
+            submitDirectPayload(data + pos, expectedBytes, directHl);
+            pos += expectedBytes;
             continue;
         }
         else if ((opcode & 0x60) == 0x60)

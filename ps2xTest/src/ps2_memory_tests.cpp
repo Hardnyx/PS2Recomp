@@ -1235,6 +1235,131 @@ void register_ps2_memory_tests()
             t.Equals(order[2], static_cast<uint8_t>(0x33u), "PATH3 should be drained third");
         });
 
+        tc.Run("VIF1 DMA resumes split DIRECT and DIRECTHL payloads", [](TestCase &t)
+        {
+            constexpr uint32_t kVif1Ch = 0x10009000u;
+            constexpr uint32_t kSource = 0x0002B000u;
+            for (const uint8_t opcode : {uint8_t{0x50u}, uint8_t{0x51u}})
+            {
+                PS2Memory mem;
+                t.IsTrue(mem.initialize(), "split DIRECT DMA fixture should initialize");
+                std::vector<std::vector<uint8_t>> packets;
+                mem.setGifPacketCallback([&](const uint8_t *data, uint32_t count)
+                {
+                    packets.emplace_back(data, data + count);
+                });
+
+                const uint32_t chunks[][4] = {
+                    {0u, 0u, 0u, makeVifCmd(opcode, 0u, 2u)},
+                    {0x00000001u, 0x08000000u, 0u, 0u},
+                    {0x11223344u, 0x55667788u, 0x99AABBCCu, 0xDDEEFF00u},
+                    {makeVifCmd(0x07u, 0u, 0x1234u), 0u, 0u, 0u}
+                };
+                // First fragment ends exactly at the VIFcode. The next two
+                // DMA starts contain one GIFtag and one IMAGE qword.
+                for (uint32_t chunk = 0u; chunk < 4u; ++chunk)
+                {
+                    std::memcpy(mem.getRDRAM() + kSource, chunks[chunk], 16u);
+                    mem.writeIORegister(kVif1Ch + 0x10u, kSource);
+                    mem.writeIORegister(kVif1Ch + 0x20u, 1u);
+                    mem.writeIORegister(kVif1Ch, 0x100u);
+                    if (chunk < 2u)
+                        t.Equals(packets.size(), static_cast<size_t>(0u),
+                                 "incomplete DIRECT must not dispatch a partial GIF packet");
+                }
+
+                t.Equals(packets.size(), static_cast<size_t>(1u),
+                         "split DIRECT must dispatch the complete GIF packet once");
+                if (packets.size() == 1u)
+                {
+                    t.Equals(packets[0].size(), static_cast<size_t>(32u),
+                             "completed DIRECT payload must include two GIF quadwords");
+                    if (packets[0].size() == 32u)
+                    {
+                        bool bytesMatch = true;
+                        const auto *expected = reinterpret_cast<const uint8_t *>(&chunks[1][0]);
+                        for (uint32_t i = 0u; i < 16u; ++i)
+                        {
+                            if (packets[0][i] != expected[i] ||
+                                packets[0][i + 16u] !=
+                                    reinterpret_cast<const uint8_t *>(&chunks[2][0])[i])
+                            {
+                                bytesMatch = false;
+                                break;
+                            }
+                        }
+                        t.IsTrue(bytesMatch, "DIRECT payload bytes must retain transport order");
+                    }
+                }
+                t.Equals(mem.vif1_regs.mark, 0x1234u,
+                         "VIFcodes after a complete DIRECT should resume normally");
+                t.Equals(mem.readIORegister(kVif1Ch + 0x20u), 0u,
+                         "each completed VIF1 DMA must leave QWC zero");
+            }
+        });
+
+        tc.Run("VIF1 DIRECT resumes inside a GIF quadword before trailing VIFcodes", [](TestCase &t)
+        {
+            PS2Memory mem;
+            t.IsTrue(mem.initialize(), "unaligned DIRECT fixture should initialize");
+            std::vector<std::vector<uint8_t>> packets;
+            mem.setGifPacketCallback([&](const uint8_t *data, uint32_t count)
+            {
+                packets.emplace_back(data, data + count);
+            });
+            const uint32_t first[] = {
+                makeVifCmd(0x50u, 0u, 1u), 0x11111111u, 0x22222222u, 0x33333333u
+            };
+            const uint32_t second[] = {
+                0x44444444u, makeVifCmd(0x07u, 0u, 0x5678u), 0u, 0u
+            };
+            mem.processVIF1Data(reinterpret_cast<const uint8_t *>(first), sizeof(first));
+            t.Equals(packets.size(), static_cast<size_t>(0u),
+                     "twelve-byte DIRECT fragment must not be emitted prematurely");
+            mem.processVIF1Data(reinterpret_cast<const uint8_t *>(second), sizeof(second));
+            t.Equals(packets.size(), static_cast<size_t>(1u),
+                     "remaining four bytes should complete one GIF quadword");
+            if (packets.size() == 1u)
+            {
+                t.Equals(packets[0].size(), static_cast<size_t>(16u),
+                         "unaligned DIRECT must emit exactly one quadword");
+                uint32_t words[4]{};
+                if (packets[0].size() == 16u)
+                    std::memcpy(words, packets[0].data(), sizeof words);
+                t.Equals(words[0], 0x11111111u, "first GIF word must be preserved");
+                t.Equals(words[1], 0x22222222u, "second GIF word must be preserved");
+                t.Equals(words[2], 0x33333333u, "third GIF word must be preserved");
+                t.Equals(words[3], 0x44444444u, "fourth GIF word must cross the boundary");
+            }
+            t.Equals(mem.vif1_regs.mark, 0x5678u,
+                     "next VIFcode after a split quadword must be decoded");
+        });
+
+        tc.Run("VIF1 FBRST cancels a fragmented DIRECT command", [](TestCase &t)
+        {
+            PS2Memory mem;
+            t.IsTrue(mem.initialize(), "DIRECT reset fixture should initialize");
+            std::vector<std::vector<uint8_t>> packets;
+            mem.setGifPacketCallback([&](const uint8_t *data, uint32_t count)
+            {
+                packets.emplace_back(data, data + count);
+            });
+            const uint32_t partial[] = {
+                makeVifCmd(0x51u, 0u, 2u), 0xAAAA0001u, 0xAAAA0002u, 0xAAAA0003u
+            };
+            const uint32_t following[] = {
+                makeVifCmd(0x07u, 0u, 0xABCDu), 0u, 0u, 0u
+            };
+            mem.processVIF1Data(reinterpret_cast<const uint8_t *>(partial), sizeof(partial));
+            t.IsTrue(mem.writeIORegister(0x10003C10u, 1u),
+                     "VIF1 reset should accept FBRST.RST");
+            mem.processVIF1Data(reinterpret_cast<const uint8_t *>(following), sizeof(following));
+            t.Equals(mem.vif1_regs.mark, 0xABCDu,
+                     "a reset must cancel the pending DIRECT payload");
+            t.Equals(packets.size(), static_cast<size_t>(0u),
+                     "an abandoned DIRECT must not submit a partial GIF packet");
+        });
+
         tc.Run("VIF DIRECTHL stalls behind queued PATH3 IMAGE packets", [](TestCase &t)
         {
             PS2Memory mem;
