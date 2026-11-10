@@ -807,6 +807,80 @@ void register_ps2_memory_tests()
                      "a second completion poll must not replay VIF1 DMA causes");
         });
 
+        tc.Run("I-bit data-bearing VIF1 commands wait for their complete payload", [](TestCase &t)
+        {
+            constexpr uint32_t kInt = 1u << 11u;
+            struct Case { uint8_t opcode; uint8_t num; uint16_t imm; uint32_t payloadWords; };
+            constexpr Case cases[] = {
+                {0x20u, 0u, 0u, 1u}, // STMASK
+                {0x30u, 0u, 0u, 4u}, // STROW
+                {0x31u, 0u, 0u, 4u}, // STCOL
+                {0x4Au, 2u, 0u, 4u}, // MPG
+                {0x50u, 0u, 1u, 4u}, // DIRECT
+                {0x51u, 0u, 1u, 4u}, // DIRECTHL
+            };
+            for (const Case &tcData : cases)
+            {
+                PS2Memory mem;
+                t.IsTrue(mem.initialize(), "fragmented I-bit VIF1 fixture should initialize");
+                const uint32_t header[] = {
+                    makeVifCmd(tcData.opcode, tcData.num, tcData.imm) | 0x80000000u,
+                    0u, 0u, 0u
+                };
+                mem.processVIF1Data(reinterpret_cast<const uint8_t *>(header),
+                                    sizeof(header));
+                t.Equals(mem.vif1_regs.stat & kInt, 0u,
+                         "the I-bit must not latch when the command has no payload yet");
+
+                std::vector<uint32_t> payload(tcData.payloadWords, 0u);
+                for (uint32_t i = 0u; i < tcData.payloadWords; ++i)
+                    payload[i] = (tcData.opcode == 0x50u || tcData.opcode == 0x51u)
+                        ? 0u : (i + 1u);
+                for (uint32_t i = 0u; i < tcData.payloadWords; ++i)
+                {
+                    mem.processVIF1Data(
+                        reinterpret_cast<const uint8_t *>(&payload[i]), 4u);
+                    t.Equals(mem.vif1_regs.stat & kInt,
+                             (i + 1u == tcData.payloadWords) ? kInt : 0u,
+                             "INT must latch only when the final payload word arrives");
+                }
+
+                t.IsTrue(mem.writeIORegister(0x10003C10u, 0x8u),
+                         "FBRST.STC should acknowledge the completed I-bit");
+                t.Equals(mem.vif1_regs.stat & kInt, 0u,
+                         "the completed I-bit must clear on FBRST.STC");
+            }
+        });
+
+        tc.Run("VIF1 reset cancels pending I-bit fixed and streaming commands", [](TestCase &t)
+        {
+            constexpr uint32_t kInt = 1u << 11u;
+            constexpr uint8_t opcodes[] = {0x20u, 0x30u, 0x31u, 0x4Au, 0x50u, 0x51u};
+            for (const uint8_t opcode : opcodes)
+            {
+                PS2Memory mem;
+                t.IsTrue(mem.initialize(), "reset pending VIF1 I-bit fixture should initialize");
+                const uint8_t num = (opcode == 0x4Au) ? 2u : 0u;
+                const uint16_t imm = (opcode == 0x50u || opcode == 0x51u) ? 1u : 0u;
+                const uint32_t packet[] = {
+                    makeVifCmd(opcode, num, imm) | 0x80000000u, 0u, 0u, 0u
+                };
+                mem.processVIF1Data(reinterpret_cast<const uint8_t *>(packet),
+                                    sizeof(packet));
+                t.Equals(mem.vif1_regs.stat & kInt, 0u,
+                         "a pending command must not set INT before reset");
+                t.IsTrue(mem.writeIORegister(0x10003C10u, 1u),
+                         "FBRST.RST should cancel the pending payload");
+                const uint32_t marker = makeVifCmd(0x07u, 0u, 0xBEEF);
+                mem.processVIF1Data(reinterpret_cast<const uint8_t *>(&marker),
+                                    sizeof(marker));
+                t.Equals(mem.vif1_regs.mark, 0xBEEFu,
+                         "post-reset MARK must decode outside the cancelled payload");
+                t.Equals(mem.vif1_regs.stat & kInt, 0u,
+                         "reset must discard the pending I-bit");
+            }
+        });
+
         tc.Run("VIF1 I-bit UNPACK asserts INT only after its payload arrives", [](TestCase &t)
         {
             PS2Memory mem;

@@ -333,13 +333,16 @@ bool PS2Memory::initialize(size_t ramSize)
     m_vif1PendingPath2DirectHl = false;
     m_vif1PendingRegister = Vif1PendingRegister::None;
     m_vif1PendingRegisterBytes = 0u;
+    m_vif1PendingRegisterIrq = false;
     m_vif1PendingMpgDestination = 0u;
     m_vif1PendingMpgBytes = 0u;
+    m_vif1PendingMpgIrq = false;
     m_vif1PendingUnpackPacket.clear();
     m_vif1PendingUnpackBytes = 0u;
     m_vif1PendingDirectPayload.clear();
     m_vif1PendingDirectBytes = 0u;
     m_vif1PendingDirectHl = false;
+    m_vif1PendingDirectIrq = false;
     resetEeTimers();
 
     try
@@ -1281,13 +1284,16 @@ bool PS2Memory::writeIORegister(uint32_t address, uint32_t value)
                 m_vif1PendingPath2DirectHl = false;
                 m_vif1PendingRegister = Vif1PendingRegister::None;
                 m_vif1PendingRegisterBytes = 0u;
+                m_vif1PendingRegisterIrq = false;
                 m_vif1PendingMpgDestination = 0u;
                 m_vif1PendingMpgBytes = 0u;
+                m_vif1PendingMpgIrq = false;
                 m_vif1PendingUnpackPacket.clear();
                 m_vif1PendingUnpackBytes = 0u;
                 m_vif1PendingDirectPayload.clear();
                 m_vif1PendingDirectBytes = 0u;
                 m_vif1PendingDirectHl = false;
+                m_vif1PendingDirectIrq = false;
                 m_path3Masked = false;
                 if (wasPath3Masked)
                     flushMaskedPath3Packets();

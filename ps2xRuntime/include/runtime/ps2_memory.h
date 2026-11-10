@@ -420,10 +420,12 @@ public:
     Vif1PendingRegister m_vif1PendingRegister = Vif1PendingRegister::None;
     std::array<uint8_t, 16> m_vif1PendingRegisterData{};
     uint32_t m_vif1PendingRegisterBytes = 0u;
+    bool m_vif1PendingRegisterIrq = false;
     // MPG payload can span multiple DMA packets, including a partial
     // microinstruction at the boundary of two 16-byte transport blocks.
     uint32_t m_vif1PendingMpgDestination = 0u;
     uint32_t m_vif1PendingMpgBytes = 0u;
+    bool m_vif1PendingMpgIrq = false;
     // UNPACK is bounded to at most 256 V4-32 vectors plus its 4-byte
     // VIFcode. Keep a partial command until its entire payload arrives.
     std::vector<uint8_t> m_vif1PendingUnpackPacket;
@@ -434,6 +436,7 @@ public:
     std::vector<uint8_t> m_vif1PendingDirectPayload;
     uint32_t m_vif1PendingDirectBytes = 0u;
     bool m_vif1PendingDirectHl = false;
+    bool m_vif1PendingDirectIrq = false;
     std::vector<std::vector<uint8_t>> m_path3MaskedFifo;
 
     struct PendingTransfer

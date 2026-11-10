@@ -351,6 +351,9 @@ void PS2Memory::processVIF1Data(const uint8_t *data, uint32_t sizeBytes)
                             m_vif1PendingDirectHl);
         m_vif1PendingDirectPayload.clear();
         m_vif1PendingDirectHl = false;
+        if (m_vif1PendingDirectIrq)
+            vif1_regs.stat |= (1u << 11);
+        m_vif1PendingDirectIrq = false;
     }
 
     // A previous VIF1 qword may have ended inside STMASK, STROW or STCOL.
@@ -381,6 +384,9 @@ void PS2Memory::processVIF1Data(const uint8_t *data, uint32_t sizeBytes)
         }
         m_vif1PendingRegister = Vif1PendingRegister::None;
         m_vif1PendingRegisterBytes = 0u;
+        if (m_vif1PendingRegisterIrq)
+            vif1_regs.stat |= (1u << 11);
+        m_vif1PendingRegisterIrq = false;
     }
 
     const auto copyMicroprogramBytes = [&](uint32_t destination, const uint8_t *source, uint32_t count)
@@ -403,6 +409,9 @@ void PS2Memory::processVIF1Data(const uint8_t *data, uint32_t sizeBytes)
         pos += available;
         if (m_vif1PendingMpgBytes != 0u)
             return;
+        if (m_vif1PendingMpgIrq)
+            vif1_regs.stat |= (1u << 11);
+        m_vif1PendingMpgIrq = false;
     }
 
     const auto retainFixedPayload = [&](Vif1PendingRegister reg)
@@ -412,6 +421,7 @@ void PS2Memory::processVIF1Data(const uint8_t *data, uint32_t sizeBytes)
         m_vif1PendingRegisterBytes = remaining;
         if (remaining != 0u)
             std::memcpy(m_vif1PendingRegisterData.data(), data + pos, remaining);
+        m_vif1PendingRegisterIrq = (vif1_regs.code & 0x80000000u) != 0u;
     };
 
     while (pos + 4 <= sizeBytes)
@@ -455,10 +465,14 @@ void PS2Memory::processVIF1Data(const uint8_t *data, uint32_t sizeBytes)
         // Track most-recent command for VIFn_CODE emulation.
         vif1_regs.code = cmd;
         vif1_regs.num = num;
-        // A payload-bearing UNPACK must complete before its I-bit can
-        // assert VIF1_STAT.INT. Other VIFcodes keep their existing
-        // immediate behavior until their stall model is qualified.
-        if (irq && (opcode & 0x60u) != 0x60u)
+        // An I-bit on a data-bearing command must not publish INT until
+        // its payload is complete. Keep immediate (payload-free) commands
+        // on the existing synchronous register-latch path.
+        const bool hasPayload = opcode == VIF_STMASK || opcode == VIF_STROW ||
+                                opcode == VIF_STCOL || opcode == VIF_MPG ||
+                                opcode == VIF_DIRECT || opcode == VIF_DIRECTHL ||
+                                (opcode & 0x60u) == 0x60u;
+        if (irq && !hasPayload)
             vif1_regs.stat |= (1u << 11); // INT
 
         if (opcode == VIF_NOP)
@@ -562,6 +576,8 @@ void PS2Memory::processVIF1Data(const uint8_t *data, uint32_t sizeBytes)
             }
             std::memcpy(&vif1_regs.mask, data + pos, 4u);
             pos += 4u;
+            if (irq)
+                vif1_regs.stat |= (1u << 11);
             continue;
         }
         else if (opcode == VIF_STROW)
@@ -573,6 +589,8 @@ void PS2Memory::processVIF1Data(const uint8_t *data, uint32_t sizeBytes)
             }
             std::memcpy(vif1_regs.row, data + pos, 16u);
             pos += 16u;
+            if (irq)
+                vif1_regs.stat |= (1u << 11);
             continue;
         }
         else if (opcode == VIF_STCOL)
@@ -584,6 +602,8 @@ void PS2Memory::processVIF1Data(const uint8_t *data, uint32_t sizeBytes)
             }
             std::memcpy(vif1_regs.col, data + pos, 16u);
             pos += 16u;
+            if (irq)
+                vif1_regs.stat |= (1u << 11);
             continue;
         }
         else if (opcode == VIF_MPG)
@@ -598,8 +618,11 @@ void PS2Memory::processVIF1Data(const uint8_t *data, uint32_t sizeBytes)
             {
                 m_vif1PendingMpgDestination = destination + available;
                 m_vif1PendingMpgBytes = expected - available;
+                m_vif1PendingMpgIrq = irq;
                 break;
             }
+            if (irq)
+                vif1_regs.stat |= (1u << 11);
             continue;
         }
         else if (opcode == VIF_DIRECT || opcode == VIF_DIRECTHL)
@@ -616,11 +639,14 @@ void PS2Memory::processVIF1Data(const uint8_t *data, uint32_t sizeBytes)
                 m_vif1PendingDirectPayload.assign(data + pos, data + pos + available);
                 m_vif1PendingDirectBytes = expectedBytes - available;
                 m_vif1PendingDirectHl = directHl;
+                m_vif1PendingDirectIrq = irq;
                 break;
             }
 
             submitDirectPayload(data + pos, expectedBytes, directHl);
             pos += expectedBytes;
+            if (irq)
+                vif1_regs.stat |= (1u << 11);
             continue;
         }
         else if ((opcode & 0x60) == 0x60)
