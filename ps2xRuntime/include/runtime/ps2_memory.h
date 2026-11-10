@@ -412,6 +412,14 @@ public:
     bool m_path3Masked = false;
     uint32_t m_vif1PendingPath2ImageQwc = 0u;
     bool m_vif1PendingPath2DirectHl = false;
+
+    // VIF1 DMA chains can split a fixed-width VIFcode payload across
+    // transport qwords. Retain it until complete, never decode its words
+    // as independent commands. Reset this state with VIF1_FBRST.RST.
+    enum class Vif1PendingRegister : uint8_t { None, Mask, Row, Col };
+    Vif1PendingRegister m_vif1PendingRegister = Vif1PendingRegister::None;
+    std::array<uint8_t, 16> m_vif1PendingRegisterData{};
+    uint32_t m_vif1PendingRegisterBytes = 0u;
     std::vector<std::vector<uint8_t>> m_path3MaskedFifo;
 
     struct PendingTransfer

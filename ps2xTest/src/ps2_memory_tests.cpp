@@ -582,6 +582,85 @@ void register_ps2_memory_tests()
             t.Equals(mem.vif1_regs.col[3], 0xAAAA0004u, "STCOL should set col[3]");
         });
 
+        tc.Run("VIF1 fixed-width control payloads resume across DMA qwords", [](TestCase &t)
+        {
+            PS2Memory mem;
+            t.IsTrue(mem.initialize(), "VIF1 fragmented-control fixture should initialize");
+
+            // Each 16-byte block is a separate transport fragment. STMASK
+            // and STROW begin at the end of a block, while STCOL has only
+            // three of its four data words in the first block.
+            constexpr uint32_t blocks[][4] = {
+                {0x07001234u, 0x00000000u, 0x00000000u, 0x20000000u},
+                {0x89ABCDEFu, 0x00000000u, 0x00000000u, 0x30000000u},
+                {0x11111111u, 0x22222222u, 0x33333333u, 0x44444444u},
+                {0x31000000u, 0xAAAA0001u, 0xAAAA0002u, 0xAAAA0003u},
+                {0xAAAA0004u, 0x07005678u, 0x00000000u, 0x00000000u},
+            };
+            for (uint32_t block = 0u; block < 5u; ++block)
+            {
+                mem.processVIF1Data(reinterpret_cast<const uint8_t *>(blocks[block]),
+                                    sizeof(blocks[block]));
+                if (block == 0u)
+                {
+                    t.Equals(mem.vif1_regs.mark, 0x1234u, "first MARK should execute");
+                    t.Equals(mem.vif1_regs.mask, 0u,
+                             "incomplete STMASK must not publish a partial mask");
+                }
+                if (block == 1u)
+                {
+                    t.Equals(mem.vif1_regs.mask, 0x89ABCDEFu,
+                             "STMASK must accept the payload from the next qword");
+                    t.Equals(mem.vif1_regs.row[0], 0u,
+                             "incomplete STROW must leave existing row data intact");
+                }
+                if (block == 2u)
+                {
+                    t.Equals(mem.vif1_regs.row[0], 0x11111111u,
+                             "STROW must resume at the next qword");
+                    t.Equals(mem.vif1_regs.row[3], 0x44444444u,
+                             "STROW must publish the final word");
+                }
+                if (block == 3u)
+                {
+                    t.Equals(mem.vif1_regs.col[0], 0u,
+                             "partial STCOL must not publish before its final word");
+                }
+            }
+
+            t.Equals(mem.vif1_regs.mark, 0x5678u,
+                     "commands after the completed STCOL payload must be parsed");
+            t.Equals(mem.vif1_regs.col[0], 0xAAAA0001u,
+                     "STCOL first word should survive the chunk boundary");
+            t.Equals(mem.vif1_regs.col[1], 0xAAAA0002u,
+                     "STCOL second word should survive the chunk boundary");
+            t.Equals(mem.vif1_regs.col[2], 0xAAAA0003u,
+                     "STCOL third word should survive the chunk boundary");
+            t.Equals(mem.vif1_regs.col[3], 0xAAAA0004u,
+                     "STCOL last word should be consumed only once");
+        });
+
+        tc.Run("VIF1 reset discards an incomplete fixed-width command", [](TestCase &t)
+        {
+            PS2Memory mem;
+            t.IsTrue(mem.initialize(), "VIF1 reset fixture should initialize");
+            constexpr uint32_t first[] = {
+                0x07001234u, 0x00000000u, 0x00000000u, 0x30000000u
+            };
+            constexpr uint32_t afterReset[] = {
+                0x07005678u, 0x00000000u, 0x00000000u, 0x00000000u
+            };
+
+            mem.processVIF1Data(reinterpret_cast<const uint8_t *>(first), sizeof(first));
+            t.Equals(mem.vif1_regs.mark, 0x1234u, "initial MARK should execute");
+            t.IsTrue(mem.writeIORegister(0x10003C10u, 1u),
+                     "FBRST.RST should accept a reset request");
+            mem.processVIF1Data(reinterpret_cast<const uint8_t *>(afterReset), sizeof(afterReset));
+            t.Equals(mem.vif1_regs.mark, 0x5678u,
+                     "reset must not treat subsequent commands as STROW data");
+            t.Equals(mem.vif1_regs.row[0], 0u, "reset must leave VIF row data cleared");
+        });
+
         tc.Run("VIF UNPACK V4-16 sign and zero extension follow immediate bit14", [](TestCase &t)
         {
             PS2Memory mem;

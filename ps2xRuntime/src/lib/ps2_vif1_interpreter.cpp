@@ -302,6 +302,45 @@ void PS2Memory::processVIF1Data(const uint8_t *data, uint32_t sizeBytes)
 
     uint32_t pos = 0;
 
+    // A previous VIF1 qword may have ended inside STMASK, STROW or STCOL.
+    // Consume that command's remaining payload before reading any new opcode.
+    if (m_vif1PendingRegister != Vif1PendingRegister::None)
+    {
+        const uint32_t required = (m_vif1PendingRegister == Vif1PendingRegister::Mask) ? 4u : 16u;
+        const uint32_t available = std::min(required - m_vif1PendingRegisterBytes, sizeBytes);
+        std::memcpy(m_vif1PendingRegisterData.data() + m_vif1PendingRegisterBytes, data, available);
+        m_vif1PendingRegisterBytes += available;
+        pos = available;
+        if (m_vif1PendingRegisterBytes < required)
+            return;
+
+        switch (m_vif1PendingRegister)
+        {
+        case Vif1PendingRegister::Mask:
+            std::memcpy(&vif1_regs.mask, m_vif1PendingRegisterData.data(), 4u);
+            break;
+        case Vif1PendingRegister::Row:
+            std::memcpy(vif1_regs.row, m_vif1PendingRegisterData.data(), 16u);
+            break;
+        case Vif1PendingRegister::Col:
+            std::memcpy(vif1_regs.col, m_vif1PendingRegisterData.data(), 16u);
+            break;
+        case Vif1PendingRegister::None:
+            break;
+        }
+        m_vif1PendingRegister = Vif1PendingRegister::None;
+        m_vif1PendingRegisterBytes = 0u;
+    }
+
+    const auto retainFixedPayload = [&](Vif1PendingRegister reg)
+    {
+        const uint32_t remaining = sizeBytes - pos;
+        m_vif1PendingRegister = reg;
+        m_vif1PendingRegisterBytes = remaining;
+        if (remaining != 0u)
+            std::memcpy(m_vif1PendingRegisterData.data(), data + pos, remaining);
+    };
+
     while (pos + 4 <= sizeBytes)
     {
         if (m_vif1PendingPath2ImageQwc != 0u)
@@ -440,28 +479,35 @@ void PS2Memory::processVIF1Data(const uint8_t *data, uint32_t sizeBytes)
         }
         else if (opcode == VIF_STMASK)
         {
-            if (pos + 4 > sizeBytes)
+            if (sizeBytes - pos < 4u)
+            {
+                retainFixedPayload(Vif1PendingRegister::Mask);
                 break;
-            uint32_t maskValue = 0;
-            std::memcpy(&maskValue, data + pos, sizeof(maskValue));
-            vif1_regs.mask = maskValue;
-            pos += 4;
+            }
+            std::memcpy(&vif1_regs.mask, data + pos, 4u);
+            pos += 4u;
             continue;
         }
         else if (opcode == VIF_STROW)
         {
-            if (pos + 16 > sizeBytes)
+            if (sizeBytes - pos < 16u)
+            {
+                retainFixedPayload(Vif1PendingRegister::Row);
                 break;
-            std::memcpy(vif1_regs.row, data + pos, 16);
-            pos += 16;
+            }
+            std::memcpy(vif1_regs.row, data + pos, 16u);
+            pos += 16u;
             continue;
         }
         else if (opcode == VIF_STCOL)
         {
-            if (pos + 16 > sizeBytes)
+            if (sizeBytes - pos < 16u)
+            {
+                retainFixedPayload(Vif1PendingRegister::Col);
                 break;
-            std::memcpy(vif1_regs.col, data + pos, 16);
-            pos += 16;
+            }
+            std::memcpy(vif1_regs.col, data + pos, 16u);
+            pos += 16u;
             continue;
         }
         else if (opcode == VIF_MPG)
