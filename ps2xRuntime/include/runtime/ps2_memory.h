@@ -346,6 +346,9 @@ public:
     void processVIF0Data(const uint8_t *data, uint32_t sizeBytes);
     void processVIF1Data(uint32_t srcPhysAddr, uint32_t sizeBytes);
     void processVIF1Data(const uint8_t *data, uint32_t sizeBytes);
+    // Internal replay uses the I-bit decision captured at the command header.
+    void processVIF1DataImpl(const uint8_t *data, uint32_t sizeBytes,
+                             bool overrideFirstIrq, bool firstIrq);
     void processPendingTransfers();
     std::vector<uint32_t> consumeCompletedDmacCauses();
 
@@ -430,6 +433,7 @@ public:
     // VIFcode. Keep a partial command until its entire payload arrives.
     std::vector<uint8_t> m_vif1PendingUnpackPacket;
     uint32_t m_vif1PendingUnpackBytes = 0u;
+    bool m_vif1PendingUnpackIrq = false;
     // A DIRECT/DIRECTHL GIF packet can be divided between DMA blocks, even
     // in the middle of a quadword. Defer submission until all declared bytes
     // have arrived, rather than decoding the remainder as VIF instructions.

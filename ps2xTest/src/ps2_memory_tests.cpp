@@ -881,6 +881,72 @@ void register_ps2_memory_tests()
             }
         });
 
+        tc.Run("VIF1_ERR.MII suppresses immediate I-bits without skipping commands", [](TestCase &t)
+        {
+            PS2Memory mem;
+            t.IsTrue(mem.initialize(), "MII fixture should initialize");
+            constexpr uint32_t kErr = 0x10003C20u;
+            constexpr uint32_t kStat = 0x10003C00u;
+            constexpr uint32_t kInt = 1u << 11u;
+            const uint32_t cmd = makeVifCmd(0x07u, 0u, 0x1357u) | 0x80000000u;
+            t.IsTrue(mem.writeIORegister(kErr, 1u), "MII should be writable");
+            mem.processVIF1Data(reinterpret_cast<const uint8_t *>(&cmd), sizeof(cmd));
+            t.Equals(mem.read32(0x10003C30u), 0x1357u, "MII must not suppress MARK");
+            t.Equals(mem.read32(kStat) & kInt, 0u, "masked I-bit must not set INT");
+            t.IsTrue(mem.writeIORegister(kErr, 0u), "MII should be disableable");
+            mem.processVIF1Data(reinterpret_cast<const uint8_t *>(&cmd), sizeof(cmd));
+            t.Equals(mem.read32(kStat) & kInt, kInt, "unmasked command must set INT");
+            t.IsTrue(mem.writeIORegister(0x10003C10u, 8u), "STC should acknowledge INT");
+            t.Equals(mem.read32(kStat) & kInt, 0u, "STC must clear INT");
+        });
+
+        tc.Run("VIF1_ERR.MII is sampled on each fragmented command header", [](TestCase &t)
+        {
+            constexpr uint32_t kErr = 0x10003C20u;
+            constexpr uint32_t kStat = 0x10003C00u;
+            constexpr uint32_t kInt = 1u << 11u;
+            struct Command { uint8_t opcode; uint8_t count; uint16_t imm; uint32_t words; };
+            constexpr Command commands[] = {
+                {0x20u, 0u, 0u, 1u}, {0x30u, 0u, 0u, 4u},
+                {0x31u, 0u, 0u, 4u}, {0x4Au, 2u, 0u, 4u},
+                {0x50u, 0u, 1u, 4u}, {0x51u, 0u, 1u, 4u},
+                {0x6Cu, 1u, 0x20u, 4u},
+            };
+            for (const Command &sample : commands)
+            {
+                for (const bool maskedAtHeader : {false, true})
+                {
+                    PS2Memory mem;
+                    t.IsTrue(mem.initialize(), "fragmented MII fixture should initialize");
+                    const uint32_t initial = maskedAtHeader ? 1u : 0u;
+                    const uint32_t changed = maskedAtHeader ? 0u : 1u;
+                    mem.writeIORegister(kErr, initial);
+                    const uint32_t header[] = {
+                        0u, 0u, 0u,
+                        makeVifCmd(sample.opcode, sample.count, sample.imm) | 0x80000000u
+                    };
+                    mem.processVIF1Data(reinterpret_cast<const uint8_t *>(header), sizeof(header));
+                    t.Equals(mem.read32(0x10003C80u), header[3],
+                             "pending VIF1_CODE must retain the original I-bit header");
+                    t.Equals(mem.read32(kStat) & kInt, 0u,
+                             "incomplete payload must not set INT");
+                    mem.writeIORegister(kErr, changed);
+                    t.Equals(mem.read32(kErr), changed, "MII readback must change immediately");
+                    std::vector<uint32_t> payload(sample.words, 0u);
+                    if (sample.opcode != 0x50u && sample.opcode != 0x51u)
+                        for (uint32_t i = 0; i < sample.words; ++i)
+                            payload[i] = i + 1u;
+                    mem.processVIF1Data(reinterpret_cast<const uint8_t *>(payload.data()),
+                                        static_cast<uint32_t>(payload.size() * sizeof(uint32_t)));
+                    t.Equals(mem.read32(kStat) & kInt, maskedAtHeader ? 0u : kInt,
+                             "MII after the command header must not retroactively change INT");
+                    mem.writeIORegister(0x10003C10u, 8u);
+                    t.Equals(mem.read32(kStat) & kInt, 0u, "STC must clear INT");
+                    t.Equals(mem.read32(kErr), changed, "STC must preserve MII");
+                }
+            }
+        });
+
         tc.Run("VIF1 I-bit UNPACK asserts INT only after its payload arrives", [](TestCase &t)
         {
             PS2Memory mem;

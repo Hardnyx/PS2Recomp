@@ -297,6 +297,12 @@ void PS2Memory::processVIF1Data(uint32_t srcPhys, uint32_t sizeBytes)
 
 void PS2Memory::processVIF1Data(const uint8_t *data, uint32_t sizeBytes)
 {
+    processVIF1DataImpl(data, sizeBytes, false, false);
+}
+
+void PS2Memory::processVIF1DataImpl(const uint8_t *data, uint32_t sizeBytes,
+                                   bool overrideFirstIrq, bool firstIrq)
+{
     if (sizeBytes == 0u)
         return;
 
@@ -319,8 +325,11 @@ void PS2Memory::processVIF1Data(const uint8_t *data, uint32_t sizeBytes)
         // state first so the nested call cannot consume its own payload.
         std::vector<uint8_t> completePacket;
         completePacket.swap(m_vif1PendingUnpackPacket);
-        processVIF1Data(completePacket.data(),
-                        static_cast<uint32_t>(completePacket.size()));
+        const bool effectiveIrq = m_vif1PendingUnpackIrq;
+        m_vif1PendingUnpackIrq = false;
+        processVIF1DataImpl(completePacket.data(),
+                            static_cast<uint32_t>(completePacket.size()),
+                            true, effectiveIrq);
     }
 
     const auto submitDirectPayload = [&](const uint8_t *payload, uint32_t bytes, bool directHl)
@@ -414,14 +423,14 @@ void PS2Memory::processVIF1Data(const uint8_t *data, uint32_t sizeBytes)
         m_vif1PendingMpgIrq = false;
     }
 
-    const auto retainFixedPayload = [&](Vif1PendingRegister reg)
+    const auto retainFixedPayload = [&](Vif1PendingRegister reg, bool irq)
     {
         const uint32_t remaining = sizeBytes - pos;
         m_vif1PendingRegister = reg;
         m_vif1PendingRegisterBytes = remaining;
         if (remaining != 0u)
             std::memcpy(m_vif1PendingRegisterData.data(), data + pos, remaining);
-        m_vif1PendingRegisterIrq = (vif1_regs.code & 0x80000000u) != 0u;
+        m_vif1PendingRegisterIrq = irq;
     };
 
     while (pos + 4 <= sizeBytes)
@@ -460,7 +469,11 @@ void PS2Memory::processVIF1Data(const uint8_t *data, uint32_t sizeBytes)
         uint8_t opcode = (cmd >> 24) & 0x7F;
         uint16_t imm = cmd & 0xFFFF;
         uint8_t num = (cmd >> 16) & 0xFF;
-        const bool irq = (cmd & 0x80000000u) != 0u;
+        // MII masks the I-bit as the VIFcode is fetched, not later when
+        // a fragmented command finally receives its full payload.
+        const bool irq = (cmd & 0x80000000u) != 0u &&
+                         (overrideFirstIrq ? firstIrq : (vif1_regs.err & 1u) == 0u);
+        overrideFirstIrq = false;
 
         // Track most-recent command for VIFn_CODE emulation.
         vif1_regs.code = cmd;
@@ -571,7 +584,7 @@ void PS2Memory::processVIF1Data(const uint8_t *data, uint32_t sizeBytes)
         {
             if (sizeBytes - pos < 4u)
             {
-                retainFixedPayload(Vif1PendingRegister::Mask);
+                retainFixedPayload(Vif1PendingRegister::Mask, irq);
                 break;
             }
             std::memcpy(&vif1_regs.mask, data + pos, 4u);
@@ -584,7 +597,7 @@ void PS2Memory::processVIF1Data(const uint8_t *data, uint32_t sizeBytes)
         {
             if (sizeBytes - pos < 16u)
             {
-                retainFixedPayload(Vif1PendingRegister::Row);
+                retainFixedPayload(Vif1PendingRegister::Row, irq);
                 break;
             }
             std::memcpy(vif1_regs.row, data + pos, 16u);
@@ -597,7 +610,7 @@ void PS2Memory::processVIF1Data(const uint8_t *data, uint32_t sizeBytes)
         {
             if (sizeBytes - pos < 16u)
             {
-                retainFixedPayload(Vif1PendingRegister::Col);
+                retainFixedPayload(Vif1PendingRegister::Col, irq);
                 break;
             }
             std::memcpy(vif1_regs.col, data + pos, 16u);
@@ -716,6 +729,7 @@ void PS2Memory::processVIF1Data(const uint8_t *data, uint32_t sizeBytes)
                     std::memcpy(m_vif1PendingUnpackPacket.data() + 4u,
                                 data + pos, available);
                 m_vif1PendingUnpackBytes = totalBytes - available;
+                m_vif1PendingUnpackIrq = irq;
                 break;
             }
 
