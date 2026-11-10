@@ -529,9 +529,30 @@ MRK and DBF). Byte/halfword stores retain untouched lanes; FBRST.STC
 acknowledges its documented stall/interrupt flags without clearing
 FDR, whereas FBRST.RST resets FDR. The regression covers direct MMIO
 writes, subword stores, interrupt acknowledgement and reset.
-The direction bit is now guest-visible but reverse FIFO transfers and
-DMA stall/resumption are not yet modeled; this is a register
-compatibility change, not VIS or INTC_VIF1 support.
+The direction bit is now guest-visible but reverse FIFO transfers
+are not yet modeled.
+
+### Interrupt-driven VIF1 DMA suspension
+
+This candidate tracks how many bytes of a normal or chained VIF1
+DMA transfer have been consumed. A completed, unmasked I-bit VIFcode
+raises VIF1_STAT.INT and VIS during DMA parsing; the interpreter
+returns at that command boundary without decoding any later VIFcodes.
+Pending data stays queued, CHCR.STR remains set and the channel does
+not raise D_STAT or report an EE DMAC completion. FBRST.STC clears
+the stall and synchronously resumes decoding from the saved byte
+offset. Tests exercise a MARK interruption in normal DMA, an I-bit
+UNPACK with a trailing opcode in the same DMA packet, and a TTE
+DMAtag-high interrupt with an unread chain payload. Additional
+regressions cover an I-bit at the end of a DMA quadword, two stalls
+inside one DMA, MII-suppressed I-bits, and an UNPACK whose payload
+arrives in a later normal-mode transfer.
+
+This is a **command-boundary transport stall**, not cycle-accurate
+VIF/GIF FIFO contention. It does not yet schedule INTC_VIF1 source 5
+or simulate reverse-direction DMA. Existing direct parser and FIFO
+injection paths remain synchronous; the new stop/resume handling
+is enabled for DMA packet drains only.
 
 The buffered approach protects the final VU1 data result, but it
 does **not** model incremental visibility of UNPACK vector writes,

@@ -734,6 +734,255 @@ void register_ps2_memory_tests()
                      "reset should not undo an already transferred microprogram word");
         });
 
+        tc.Run("VIF1 DMA pauses after I-bit MARK and resumes on FBRST.STC", [](TestCase &t)
+        {
+            PS2Memory mem;
+            t.IsTrue(mem.initialize(), "DMA interrupt stall fixture should initialize");
+            constexpr uint32_t kChannel = 0x10009000u;
+            constexpr uint32_t kDStat = 0x1000E010u;
+            constexpr uint32_t kFbrst = 0x10003C10u;
+            constexpr uint32_t kSource = 0x0002C400u;
+            const uint32_t words[][4] = {
+                {makeVifCmd(0x07u, 0u, 0x1111u) | 0x80000000u,
+                 makeVifCmd(0x07u, 0u, 0x2222u), 0u, 0u},
+                {makeVifCmd(0x07u, 0u, 0x3333u), 0u, 0u, 0u}
+            };
+            std::memcpy(mem.getRDRAM() + kSource, words, sizeof(words));
+            mem.writeIORegister(kChannel + 0x10u, kSource);
+            mem.writeIORegister(kChannel + 0x20u, 2u);
+            mem.writeIORegister(kChannel, 0x100u);
+
+            constexpr uint32_t kInt = 1u << 11u;
+            constexpr uint32_t kVis = 1u << 10u;
+            t.Equals(mem.read32(0x10003C30u), 0x1111u,
+                     "I-bit MARK must execute before the stall");
+            t.Equals(mem.read32(0x10003C00u) & (kVis | kInt), kVis | kInt,
+                     "DMA I-bit must publish both INT and VIS");
+            t.IsTrue((mem.readIORegister(kChannel) & 0x100u) != 0u,
+                     "CHCR.STR must remain set while DMA is suspended");
+            t.IsTrue(mem.readIORegister(kChannel + 0x20u) != 0u,
+                     "QWC must not be cleared before the remaining bytes run");
+            t.Equals(mem.readIORegister(kDStat) & 2u, 0u,
+                     "a suspended DMA must not signal D_STAT completion");
+            t.IsTrue(mem.consumeCompletedDmacCauses().empty(),
+                     "a suspended DMA must not enqueue a completion cause");
+
+            mem.processPendingTransfers();
+            t.Equals(mem.read32(0x10003C30u), 0x1111u,
+                     "polling must not bypass the VIS stall");
+
+            t.IsTrue(mem.writeIORegister(kFbrst, 8u),
+                     "FBRST.STC must resume the paused DMA");
+            t.Equals(mem.read32(0x10003C00u) & (kVis | kInt), 0u,
+                     "STC must clear the completed VIF interrupt stall");
+            t.Equals(mem.read32(0x10003C30u), 0x3333u,
+                     "the unread MARK commands must execute in order");
+            t.Equals(mem.readIORegister(kChannel + 0x20u), 0u,
+                     "the complete transfer must clear QWC");
+            t.Equals(mem.readIORegister(kChannel) & 0x100u, 0u,
+                     "the complete transfer must clear CHCR.STR");
+            t.IsTrue((mem.readIORegister(kDStat) & 2u) != 0u,
+                     "D_STAT must latch only after the resumed transfer completes");
+            const std::vector<uint32_t> causes = mem.consumeCompletedDmacCauses();
+            t.Equals(causes.size(), static_cast<size_t>(1u),
+                     "resumed VIF1 DMA must emit exactly one completion");
+            if (!causes.empty())
+                t.Equals(causes[0], 1u, "completion cause must identify VIF1");
+            mem.processPendingTransfers();
+            t.IsTrue(mem.consumeCompletedDmacCauses().empty(),
+                     "a redundant drain must not duplicate completion");
+        });
+
+        tc.Run("VIF1 DMA stalls after I-bit UNPACK and preserves the trailing opcode", [](TestCase &t)
+        {
+            PS2Memory mem;
+            t.IsTrue(mem.initialize(), "UNPACK DMA stall fixture should initialize");
+            constexpr uint32_t kChannel = 0x10009000u;
+            constexpr uint32_t kDStat = 0x1000E010u;
+            constexpr uint32_t kSource = 0x0002C500u;
+            const uint32_t words[][4] = {
+                {makeVifCmd(0x6Cu, 1u, 0x20u) | 0x80000000u,
+                 0x11111111u, 0x22222222u, 0x33333333u},
+                {0x44444444u, makeVifCmd(0x07u, 0u, 0xBEEFu), 0u, 0u}
+            };
+            std::memcpy(mem.getRDRAM() + kSource, words, sizeof(words));
+            mem.writeIORegister(kChannel + 0x10u, kSource);
+            mem.writeIORegister(kChannel + 0x20u, 2u);
+            mem.writeIORegister(kChannel, 0x100u);
+            uint32_t lane = 0u;
+            std::memcpy(&lane, mem.getVU1Data() + 0x20u * 16u + 12u, 4u);
+            t.Equals(lane, 0x44444444u,
+                     "the complete V4-32 vector must be written before the stall");
+            t.Equals(mem.read32(0x10003C30u), 0u,
+                     "the trailing MARK must remain unread until STC");
+            t.IsTrue((mem.read32(0x10003C00u) & (1u << 10u)) != 0u,
+                     "UNPACK I-bit must suspend DMA with VIS");
+            t.Equals(mem.readIORegister(kDStat) & 2u, 0u,
+                     "D_STAT must not complete while trailing opcodes are unread");
+            mem.writeIORegister(0x10003C10u, 8u);
+            t.Equals(mem.read32(0x10003C30u), 0xBEEFu,
+                     "STC must resume at the first unread opcode");
+            t.IsTrue((mem.readIORegister(kDStat) & 2u) != 0u,
+                     "the resumed UNPACK DMA must complete after MARK");
+        });
+
+        tc.Run("VIF1 chained DMA keeps TTE payload after an interrupt stall", [](TestCase &t)
+        {
+            PS2Memory mem;
+            t.IsTrue(mem.initialize(), "VIF1 TTE interrupt stall fixture should initialize");
+            constexpr uint32_t kChannel = 0x10009000u;
+            constexpr uint32_t kDStat = 0x1000E010u;
+            constexpr uint32_t kTag = 0x0002C600u;
+            uint8_t *rdram = mem.getRDRAM();
+            writeDmaTag(rdram, kTag, makeDmaTag(1u, 7u, 0u, false));
+            const uint32_t high[] = {
+                0u, makeVifCmd(0x07u, 0u, 0xAAAAu) | 0x80000000u
+            };
+            const uint32_t payload[] = {
+                makeVifCmd(0x07u, 0u, 0xBBBBu), 0u, 0u, 0u
+            };
+            std::memcpy(rdram + kTag + 8u, high, sizeof high);
+            std::memcpy(rdram + kTag + 16u, payload, sizeof payload);
+            mem.writeIORegister(kChannel + 0x30u, kTag);
+            mem.writeIORegister(kChannel, 0x144u); // STR | CHAIN | TTE
+            t.Equals(mem.read32(0x10003C30u), 0xAAAAu,
+                     "the I-bit command in tag-high data must execute first");
+            t.IsTrue((mem.read32(0x10003C00u) & (1u << 10u)) != 0u,
+                     "interrupt in TTE data must suspend the chain payload");
+            t.Equals(mem.readIORegister(kDStat) & 2u, 0u,
+                     "the suspended chain must not report completion");
+            mem.writeIORegister(0x10003C10u, 8u);
+            t.Equals(mem.read32(0x10003C30u), 0xBBBBu,
+                     "STC must preserve the chain payload after tag-high data");
+            t.IsTrue((mem.readIORegister(kDStat) & 2u) != 0u,
+                     "the resumed chain must report one DMA completion");
+        });
+
+        tc.Run("VIF1 DMA retains final-command stalls and multiple I-bits", [](TestCase &t)
+        {
+            PS2Memory mem;
+            t.IsTrue(mem.initialize(), "multiple-interrupt DMA fixture should initialize");
+            constexpr uint32_t kChannel = 0x10009000u;
+            constexpr uint32_t kDStat = 0x1000E010u;
+            constexpr uint32_t kSource = 0x0002C700u;
+            const uint32_t commands[][4] = {
+                {0u, 0u, 0u, makeVifCmd(0x07u, 0u, 0x1111u) | 0x80000000u},
+                {makeVifCmd(0x07u, 0u, 0x2222u) | 0x80000000u,
+                 makeVifCmd(0x07u, 0u, 0x3333u), 0u, 0u}
+            };
+            std::memcpy(mem.getRDRAM() + kSource, commands, sizeof commands);
+            mem.writeIORegister(kChannel + 0x10u, kSource);
+            mem.writeIORegister(kChannel + 0x20u, 2u);
+            mem.writeIORegister(kChannel, 0x100u);
+
+            t.Equals(mem.read32(0x10003C30u), 0x1111u,
+                     "I-bit at a quadword boundary must stall before the next opcode");
+            t.IsTrue((mem.read32(0x10003C00u) & (1u << 10u)) != 0u,
+                     "VIS should stay set at a transport boundary");
+            t.Equals(mem.readIORegister(kDStat) & 2u, 0u,
+                     "first interrupt must not finish the DMA");
+
+            mem.writeIORegister(0x10003C10u, 8u);
+            t.Equals(mem.read32(0x10003C30u), 0x2222u,
+                     "first STC must stop again at the second I-bit");
+            t.IsTrue((mem.read32(0x10003C00u) & (1u << 10u)) != 0u,
+                     "second I-bit should generate another VIS stall");
+            t.Equals(mem.readIORegister(kDStat) & 2u, 0u,
+                     "second interrupt must not finish the DMA");
+            t.IsTrue(mem.consumeCompletedDmacCauses().empty(),
+                     "neither intermediate stall may emit DMAC completion");
+
+            mem.writeIORegister(0x10003C10u, 8u);
+            t.Equals(mem.read32(0x10003C30u), 0x3333u,
+                     "second STC must finish the unread packet");
+            t.Equals(mem.read32(0x10003C00u) & ((1u << 10u) | (1u << 11u)), 0u,
+                     "a completed resume must leave VIS and INT clear");
+            t.IsTrue((mem.readIORegister(kDStat) & 2u) != 0u,
+                     "D_STAT should complete only after all interrupts are acknowledged");
+            t.Equals(mem.consumeCompletedDmacCauses().size(), static_cast<size_t>(1u),
+                     "a multiply-interrupted DMA still completes exactly once");
+        });
+
+        tc.Run("VIF1_ERR.MII prevents a DMA interrupt stall", [](TestCase &t)
+        {
+            PS2Memory mem;
+            t.IsTrue(mem.initialize(), "masked DMA interrupt fixture should initialize");
+            constexpr uint32_t kChannel = 0x10009000u;
+            constexpr uint32_t kDStat = 0x1000E010u;
+            constexpr uint32_t kSource = 0x0002C800u;
+            const uint32_t commands[] = {
+                makeVifCmd(0x07u, 0u, 0x1111u) | 0x80000000u,
+                makeVifCmd(0x07u, 0u, 0x2222u), 0u, 0u
+            };
+            std::memcpy(mem.getRDRAM() + kSource, commands, sizeof commands);
+            mem.writeIORegister(0x10003C20u, 1u); // MII
+            mem.writeIORegister(kChannel + 0x10u, kSource);
+            mem.writeIORegister(kChannel + 0x20u, 1u);
+            mem.writeIORegister(kChannel, 0x100u);
+
+            t.Equals(mem.read32(0x10003C30u), 0x2222u,
+                     "masked command must not stall subsequent VIFcodes");
+            t.Equals(mem.read32(0x10003C00u) & ((1u << 10u) | (1u << 11u)), 0u,
+                     "MII must suppress both interrupt and resulting VIS stall");
+            t.Equals(mem.readIORegister(kChannel + 0x20u), 0u,
+                     "masked I-bit must not prevent a normal DMA completion");
+            t.IsTrue((mem.readIORegister(kDStat) & 2u) != 0u,
+                     "masked I-bit DMA must finish without STC");
+        });
+
+        tc.Run("VIF1 I-bit UNPACK can finish in a later DMA and still stall the tail", [](TestCase &t)
+        {
+            PS2Memory mem;
+            t.IsTrue(mem.initialize(), "split DMA interrupt fixture should initialize");
+            constexpr uint32_t kChannel = 0x10009000u;
+            constexpr uint32_t kDStat = 0x1000E010u;
+            constexpr uint32_t kSource = 0x0002C900u;
+            const uint32_t blocks[][4] = {
+                {0u, 0u, 0u, makeVifCmd(0x6Cu, 1u, 0x20u) | 0x80000000u},
+                {1u, 2u, 3u, 4u},
+                {makeVifCmd(0x07u, 0u, 0xBEEFu), 0u, 0u, 0u}
+            };
+            std::memcpy(mem.getRDRAM() + kSource, blocks, sizeof blocks);
+            for (uint32_t i = 0u; i < 2u; ++i)
+            {
+                mem.writeIORegister(kChannel + 0x10u, kSource + i * 16u);
+                mem.writeIORegister(kChannel + 0x20u, 1u);
+                mem.writeIORegister(kChannel, 0x100u);
+                if (i == 0u)
+                {
+                    t.Equals(mem.read32(0x10003C00u) & (1u << 10u), 0u,
+                             "incomplete UNPACK must not assert VIS");
+                    t.IsTrue((mem.readIORegister(kDStat) & 2u) != 0u,
+                             "the transport DMA with only the header may finish");
+                    mem.write32(kDStat, 2u);
+                    t.Equals(mem.consumeCompletedDmacCauses().size(),
+                             static_cast<size_t>(1u),
+                             "the first DMA must notify its own completion");
+                }
+            }
+
+            t.IsTrue((mem.read32(0x10003C00u) & (1u << 10u)) != 0u,
+                     "the second DMA must pause after completing I-bit UNPACK");
+            t.Equals(mem.readIORegister(kDStat) & 2u, 0u,
+                     "the paused second DMA must not signal completion");
+            uint32_t lastLane = 0u;
+            std::memcpy(&lastLane, mem.getVU1Data() + 0x20u * 16u + 12u, 4u);
+            t.Equals(lastLane, 4u, "the completed UNPACK vector must be intact");
+
+            // The third DMA starts only after acknowledging the second.
+            mem.writeIORegister(0x10003C10u, 8u);
+            t.IsTrue((mem.readIORegister(kDStat) & 2u) != 0u,
+                     "STC must complete the suspended second DMA");
+            mem.write32(kDStat, 2u);
+            mem.writeIORegister(kChannel + 0x10u, kSource + 32u);
+            mem.writeIORegister(kChannel + 0x20u, 1u);
+            mem.writeIORegister(kChannel, 0x100u);
+            t.Equals(mem.read32(0x10003C30u), 0xBEEFu,
+                     "the following DMA must decode its independent MARK");
+            t.IsTrue((mem.readIORegister(kDStat) & 2u) != 0u,
+                     "the final DMA must complete normally");
+        });
+
         tc.Run("VIF1 normal-mode DMA resumes split UNPACK and later commands", [](TestCase &t)
         {
             PS2Memory mem;

@@ -300,11 +300,11 @@ void PS2Memory::processVIF1Data(const uint8_t *data, uint32_t sizeBytes)
     processVIF1DataImpl(data, sizeBytes, false, false);
 }
 
-void PS2Memory::processVIF1DataImpl(const uint8_t *data, uint32_t sizeBytes,
-                                   bool overrideFirstIrq, bool firstIrq)
+uint32_t PS2Memory::processVIF1DataImpl(const uint8_t *data, uint32_t sizeBytes,
+                                       bool overrideFirstIrq, bool firstIrq)
 {
     if (sizeBytes == 0u)
-        return;
+        return 0u;
 
     uint32_t pos = 0;
 
@@ -319,7 +319,7 @@ void PS2Memory::processVIF1DataImpl(const uint8_t *data, uint32_t sizeBytes,
         m_vif1PendingUnpackBytes -= available;
         pos = available;
         if (m_vif1PendingUnpackBytes != 0u)
-            return;
+            return pos;
 
         // Reuse the existing full-packet UNPACK decoder. Clear pending
         // state first so the nested call cannot consume its own payload.
@@ -353,7 +353,7 @@ void PS2Memory::processVIF1DataImpl(const uint8_t *data, uint32_t sizeBytes,
         m_vif1PendingDirectBytes -= available;
         pos = available;
         if (m_vif1PendingDirectBytes != 0u)
-            return;
+            return pos;
 
         submitDirectPayload(m_vif1PendingDirectPayload.data(),
                             static_cast<uint32_t>(m_vif1PendingDirectPayload.size()),
@@ -375,7 +375,7 @@ void PS2Memory::processVIF1DataImpl(const uint8_t *data, uint32_t sizeBytes,
         m_vif1PendingRegisterBytes += available;
         pos = available;
         if (m_vif1PendingRegisterBytes < required)
-            return;
+            return pos;
 
         switch (m_vif1PendingRegister)
         {
@@ -417,7 +417,7 @@ void PS2Memory::processVIF1DataImpl(const uint8_t *data, uint32_t sizeBytes,
         m_vif1PendingMpgBytes -= available;
         pos += available;
         if (m_vif1PendingMpgBytes != 0u)
-            return;
+            return pos;
         if (m_vif1PendingMpgIrq)
             vif1_regs.stat |= (1u << 11);
         m_vif1PendingMpgIrq = false;
@@ -435,6 +435,12 @@ void PS2Memory::processVIF1DataImpl(const uint8_t *data, uint32_t sizeBytes,
 
     while (pos + 4 <= sizeBytes)
     {
+        if (m_vif1DmaProcessing && (vif1_regs.stat & (1u << 11u)) != 0u)
+        {
+            vif1_regs.stat |= (1u << 10u); // VIS: interrupted VIF1 DMA
+            break;
+        }
+
         if (m_vif1PendingPath2ImageQwc != 0u)
         {
             const uint32_t availableQw = (sizeBytes - pos) / 16u;
@@ -965,4 +971,10 @@ void PS2Memory::processVIF1DataImpl(const uint8_t *data, uint32_t sizeBytes,
             continue;
         }
     }
+
+    // Also stall when the interrupting command ends at the final byte
+    // of this DMA chunk. Leave CHCR.STR and D_STAT pending until STC.
+    if (m_vif1DmaProcessing && (vif1_regs.stat & (1u << 11u)) != 0u)
+        vif1_regs.stat |= (1u << 10u); // VIS
+    return pos;
 }

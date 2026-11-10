@@ -347,8 +347,8 @@ public:
     void processVIF1Data(uint32_t srcPhysAddr, uint32_t sizeBytes);
     void processVIF1Data(const uint8_t *data, uint32_t sizeBytes);
     // Internal replay uses the I-bit decision captured at the command header.
-    void processVIF1DataImpl(const uint8_t *data, uint32_t sizeBytes,
-                             bool overrideFirstIrq, bool firstIrq);
+    uint32_t processVIF1DataImpl(const uint8_t *data, uint32_t sizeBytes,
+                                 bool overrideFirstIrq, bool firstIrq);
     void processPendingTransfers();
     std::vector<uint32_t> consumeCompletedDmacCauses();
 
@@ -439,6 +439,9 @@ public:
     // have arrived, rather than decoding the remainder as VIF instructions.
     std::vector<uint8_t> m_vif1PendingDirectPayload;
     uint32_t m_vif1PendingDirectBytes = 0u;
+    // DMA parsing stops at the first completed, unmasked I-bit command.
+    // Direct component/FIFO parsing preserves the existing full-buffer path.
+    bool m_vif1DmaProcessing = false;
     bool m_vif1PendingDirectHl = false;
     bool m_vif1PendingDirectIrq = false;
     std::vector<std::vector<uint8_t>> m_path3MaskedFifo;
@@ -448,6 +451,7 @@ public:
         bool fromScratchpad = false;
         uint32_t srcAddr = 0;
         uint32_t qwc = 0;
+        uint32_t consumedBytes = 0;
         std::vector<uint8_t> chainData;
     };
     std::vector<PendingTransfer> m_pendingGifTransfers;

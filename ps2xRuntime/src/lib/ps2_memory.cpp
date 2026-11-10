@@ -342,6 +342,7 @@ bool PS2Memory::initialize(size_t ramSize)
     m_vif1PendingUnpackIrq = false;
     m_vif1PendingDirectPayload.clear();
     m_vif1PendingDirectBytes = 0u;
+    m_vif1DmaProcessing = false;
     m_vif1PendingDirectHl = false;
     m_vif1PendingDirectIrq = false;
     resetEeTimers();
@@ -1308,6 +1309,7 @@ bool PS2Memory::writeIORegister(uint32_t address, uint32_t value)
                 m_vif1PendingUnpackIrq = false;
                 m_vif1PendingDirectPayload.clear();
                 m_vif1PendingDirectBytes = 0u;
+                m_vif1DmaProcessing = false;
                 m_vif1PendingDirectHl = false;
                 m_vif1PendingDirectIrq = false;
                 m_path3Masked = false;
@@ -1316,7 +1318,12 @@ bool PS2Memory::writeIORegister(uint32_t address, uint32_t value)
             }
             if (value & 0x8u) // STC
             {
+                const bool pausedDma = (vif1_regs.stat & (1u << 10u)) != 0u;
                 vif1_regs.stat &= ~((1u << 8) | (1u << 9) | (1u << 10) | (1u << 11) | (1u << 12) | (1u << 13));
+                // A suspended VIF1 transfer owns its unread bytes until STC.
+                // The resumed drain may pause again on another I-bit command.
+                if (pausedDma && !m_pendingVif1Transfers.empty())
+                    processPendingTransfers();
             }
             break;
         case 0x10003C20u: // VIF1_ERR: MII, ME0, ME1
@@ -1884,62 +1891,67 @@ void PS2Memory::processPendingTransfers()
     m_pendingVif0Transfers.clear();
 
     const bool hadVif1 = !m_pendingVif1Transfers.empty();
-    for (auto &p : m_pendingVif1Transfers)
+    if ((vif1_regs.stat & (1u << 10u)) == 0u) // VIS
     {
-        if (!p.chainData.empty())
+        while (!m_pendingVif1Transfers.empty())
         {
-            processVIF1Data(p.chainData.data(), static_cast<uint32_t>(p.chainData.size()));
-        }
-        else if (p.qwc > 0)
-        {
-            uint32_t srcPhys = 0;
-            const uint64_t bytes64 = static_cast<uint64_t>(p.qwc) * 16ull;
-            uint32_t sizeBytes = (bytes64 > 0xFFFFFFFFull) ? 0xFFFFFFFFu : static_cast<uint32_t>(bytes64);
-            try
+            PendingTransfer &transfer = m_pendingVif1Transfers.front();
+            const uint64_t totalBytes = !transfer.chainData.empty()
+                ? static_cast<uint64_t>(transfer.chainData.size())
+                : static_cast<uint64_t>(transfer.qwc) * 16ull;
+            if (transfer.consumedBytes >= totalBytes)
             {
-                srcPhys = translateAddress(p.srcAddr);
-            }
-            catch (const std::exception &)
-            {
+                m_pendingVif1Transfers.erase(m_pendingVif1Transfers.begin());
                 continue;
             }
-            if (p.fromScratchpad)
+
+            const uint8_t *base = nullptr;
+            uint32_t count = 0u;
+            if (!transfer.chainData.empty())
             {
-                uint32_t bytesLeft = sizeBytes;
-                while (bytesLeft > 0)
-                {
-                    if (srcPhys >= PS2_SCRATCHPAD_SIZE)
-                        srcPhys = 0;
-                    uint32_t chunk = bytesLeft;
-                    if (srcPhys + chunk > PS2_SCRATCHPAD_SIZE)
-                        chunk = PS2_SCRATCHPAD_SIZE - srcPhys;
-                    if (chunk == 0)
-                        break;
-                    processVIF1Data(m_scratchpad + srcPhys, chunk);
-                    bytesLeft -= chunk;
-                    srcPhys += chunk;
-                }
+                base = transfer.chainData.data() + transfer.consumedBytes;
+                count = static_cast<uint32_t>(
+                    std::min<uint64_t>(totalBytes - transfer.consumedBytes,
+                                       0xFFFFFFFFull));
             }
             else
             {
-                uint32_t bytesLeft = sizeBytes;
-                while (bytesLeft > 0)
+                uint32_t srcPhys = 0u;
+                try
                 {
-                    if (srcPhys >= PS2_RAM_SIZE)
-                        srcPhys = 0;
-                    uint32_t chunk = bytesLeft;
-                    if (srcPhys + chunk > PS2_RAM_SIZE)
-                        chunk = PS2_RAM_SIZE - srcPhys;
-                    if (chunk == 0)
-                        break;
-                    processVIF1Data(srcPhys, chunk);
-                    bytesLeft -= chunk;
-                    srcPhys += chunk;
+                    srcPhys = translateAddress(transfer.srcAddr);
                 }
+                catch (const std::exception &)
+                {
+                    // Keep the existing invalid-source behavior: an
+                    // unresolvable transfer cannot expose payload bytes.
+                    m_pendingVif1Transfers.erase(m_pendingVif1Transfers.begin());
+                    continue;
+                }
+                const uint32_t capacity = transfer.fromScratchpad
+                    ? PS2_SCRATCHPAD_SIZE : PS2_RAM_SIZE;
+                const uint32_t offset = static_cast<uint32_t>(
+                    (static_cast<uint64_t>(srcPhys) + transfer.consumedBytes) %
+                    capacity);
+                base = (transfer.fromScratchpad ? m_scratchpad : m_rdram) + offset;
+                count = static_cast<uint32_t>(std::min<uint64_t>(
+                    totalBytes - transfer.consumedBytes, capacity - offset));
             }
+            if (count == 0u)
+                break;
+
+            m_vif1DmaProcessing = true;
+            const uint32_t consumed = processVIF1DataImpl(base, count, false, false);
+            m_vif1DmaProcessing = false;
+            transfer.consumedBytes += consumed;
+
+            if ((vif1_regs.stat & (1u << 10u)) != 0u)
+                break;
+            if (consumed == 0u || consumed < count)
+                break;
         }
     }
-    m_pendingVif1Transfers.clear();
+    const bool completedVif1 = hadVif1 && m_pendingVif1Transfers.empty();
 
     if (m_gifArbiter)
         m_gifArbiter->drain();
@@ -1978,7 +1990,7 @@ void PS2Memory::processPendingTransfers()
         m_ioRegisters[VIF0_CHANNEL + 0x00] &= ~0x100u;
         m_ioRegisters[VIF0_CHANNEL + 0x20] = 0;
     }
-    if (hadVif1)
+    if (completedVif1)
     {
         raiseDStatChannel(1u); // VIF1 channel
         queueCompletedDmacCause(1u);
@@ -2477,6 +2489,10 @@ uint32_t PS2Memory::readIORegister(uint32_t address)
         {
             if ((address & 0xFF) == 0x00)
             {
+                // Preserve VIF1 STR while unread DMA bytes are suspended
+                // behind an I-bit stall; do not manufacture completion.
+                if (address == 0x10009000u && !m_pendingVif1Transfers.empty())
+                    return m_ioRegisters[address];
                 uint32_t channelStatus = m_ioRegisters[address] & ~0x100u;
                 m_ioRegisters[address] = channelStatus;
                 return channelStatus;
