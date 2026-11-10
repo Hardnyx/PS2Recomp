@@ -1303,6 +1303,9 @@ bool PS2Memory::writeIORegister(uint32_t address, uint32_t value)
                 vif1_regs.stat &= ~((1u << 8) | (1u << 9) | (1u << 10) | (1u << 11) | (1u << 12) | (1u << 13));
             }
             break;
+        case 0x10003C20u: // VIF1_ERR: MII, ME0, ME1
+            vif1_regs.err = value & 0x7u;
+            break;
         case 0x10003C30u:
             vif1_regs.mark = value & 0xFFFFu;
             vif1_regs.stat &= ~(1u << 6); // clear MRK flag on CPU write
@@ -2416,6 +2419,40 @@ uint32_t PS2Memory::readIORegister(uint32_t address)
                (mode & 0x4u) |
                (ctrl & 0x8u);
         return stat;
+    }
+
+    // VIF1's guest-readable register file must observe the same state
+    // that processVIF1Data and FBRST mutate. The generic IO map only
+    // records CPU stores, so using it here would expose stale STAT/CODE
+    // and stale vector-base registers to EE polling.
+    if (address >= 0x10003C00u && address <= 0x10003D70u)
+    {
+        switch (address)
+        {
+        case 0x10003C00u: return vif1_regs.stat;
+        case 0x10003C10u: return m_ioRegisters.count(address) ? m_ioRegisters[address] : 0u;
+        case 0x10003C20u: return vif1_regs.err;
+        case 0x10003C30u: return vif1_regs.mark;
+        case 0x10003C40u: return vif1_regs.cycle;
+        case 0x10003C50u: return vif1_regs.mode;
+        case 0x10003C60u: return vif1_regs.num;
+        case 0x10003C70u: return vif1_regs.mask;
+        case 0x10003C80u: return vif1_regs.code;
+        case 0x10003C90u: return vif1_regs.itops;
+        case 0x10003CA0u: return vif1_regs.base;
+        case 0x10003CB0u: return vif1_regs.ofst;
+        case 0x10003CC0u: return vif1_regs.tops;
+        case 0x10003CD0u: return vif1_regs.itop;
+        case 0x10003CE0u: return vif1_regs.top;
+        default:
+            if (address >= 0x10003D00u && address <= 0x10003D30u &&
+                ((address - 0x10003D00u) % 0x10u) == 0u)
+                return vif1_regs.row[(address - 0x10003D00u) / 0x10u];
+            if (address >= 0x10003D40u && address <= 0x10003D70u &&
+                ((address - 0x10003D40u) % 0x10u) == 0u)
+                return vif1_regs.col[(address - 0x10003D40u) / 0x10u];
+            break;
+        }
     }
 
     if (address >= 0x10000000 && address < 0x10010000)

@@ -951,6 +951,84 @@ void register_ps2_memory_tests()
                      "reset must discard the aborted UNPACK interrupt");
         });
 
+        tc.Run("VIF1 MMIO reads reflect parser state and register changes", [](TestCase &t)
+        {
+            PS2Memory mem;
+            t.IsTrue(mem.initialize(), "VIF1 MMIO fixture should initialize");
+
+            constexpr uint32_t kStat = 0x10003C00u;
+            constexpr uint32_t kErr = 0x10003C20u;
+            constexpr uint32_t kMark = 0x10003C30u;
+            constexpr uint32_t kCode = 0x10003C80u;
+            constexpr uint32_t kBase = 0x10003CA0u;
+            constexpr uint32_t kOfst = 0x10003CB0u;
+            constexpr uint32_t kTops = 0x10003CC0u;
+            constexpr uint32_t kRow = 0x10003D00u;
+            constexpr uint32_t kCol = 0x10003D40u;
+            constexpr uint32_t kInt = 1u << 11u;
+
+            t.Equals(mem.read32(kStat), 0u, "VIF1_STAT should initially be clear");
+            t.IsTrue(mem.writeIORegister(kErr, 0xFFFFFFFFu),
+                     "VIF1_ERR must accept CPU writes");
+            t.Equals(mem.read32(kErr), 7u,
+                     "VIF1_ERR exposes only the supported MII/ME0/ME1 bits");
+            t.Equals(mem.vif1_regs.err, 7u,
+                     "CPU writes must change the live VIF1_ERR register");
+            mem.write32(kErr, 0u);
+
+            const uint32_t header[] = {
+                makeVifCmd(0x03u, 0u, 5u), // BASE
+                makeVifCmd(0x02u, 0u, 3u), // OFFSET
+                makeVifCmd(0x07u, 0u, 0x1234u), // MARK
+                makeVifCmd(0x30u, 0u, 0u) | 0x80000000u // I-bit STROW
+            };
+            mem.processVIF1Data(reinterpret_cast<const uint8_t *>(header),
+                                sizeof(header));
+            t.Equals(mem.read32(kBase), 5u, "BASE must be guest-visible");
+            t.Equals(mem.read32(kOfst), 3u, "OFFSET must be guest-visible");
+            t.Equals(mem.read32(kTops), 5u, "TOPS must reflect OFFSET initialization");
+            t.Equals(mem.read32(kMark), 0x1234u, "MARK should reflect VIFcode updates");
+            t.Equals(mem.read32(kCode), header[3], "CODE must expose the pending VIFcode");
+            t.Equals(mem.read32(kStat) & kInt, 0u,
+                     "the guest must not see INT before a fragmented STROW completes");
+
+            constexpr uint32_t rowPayload[] = {
+                0x11111111u, 0x22222222u, 0x33333333u, 0x44444444u
+            };
+            mem.processVIF1Data(reinterpret_cast<const uint8_t *>(rowPayload),
+                                sizeof(rowPayload));
+            t.Equals(mem.read32(kStat) & kInt, kInt,
+                     "the guest must observe INT once STROW finishes");
+            for (uint32_t i = 0u; i < 4u; ++i)
+                t.Equals(mem.read32(kRow + 0x10u * i), rowPayload[i],
+                         "STROW lanes must be visible through their MMIO registers");
+
+            const uint32_t colHeader[] = {
+                makeVifCmd(0x31u, 0u, 0u), 0u, 0u, 0u
+            };
+            // A contiguous STCOL payload includes all four data words.
+            const uint32_t colPacket[] = {
+                makeVifCmd(0x31u, 0u, 0u), 9u, 8u, 7u, 6u
+            };
+            (void)colHeader;
+            mem.processVIF1Data(reinterpret_cast<const uint8_t *>(colPacket),
+                                sizeof(colPacket));
+            for (uint32_t i = 0u; i < 4u; ++i)
+                t.Equals(mem.read32(kCol + 0x10u * i), colPacket[i + 1u],
+                         "STCOL lanes must be visible through their MMIO registers");
+
+            t.IsTrue(mem.writeIORegister(0x10003C10u, 0x8u),
+                     "FBRST.STC should acknowledge VIF1 interrupt status");
+            t.Equals(mem.read32(kStat) & kInt, 0u,
+                     "VIF1_STAT MMIO reads must reflect STC acknowledgement");
+            t.IsTrue(mem.writeIORegister(0x10003C10u, 0x1u),
+                     "FBRST.RST should reset VIF1 state");
+            t.Equals(mem.read32(kMark), 0u, "reset must clear MARK readback");
+            t.Equals(mem.read32(kCode), 0u, "reset must clear CODE readback");
+            t.Equals(mem.read32(kRow), 0u, "reset must clear STROW readback");
+            t.Equals(mem.read32(kErr), 0u, "reset must clear VIF1_ERR readback");
+        });
+
         tc.Run("VIF1 UNPACK V4-32 resumes through three DMA qwords", [](TestCase &t)
         {
             PS2Memory fragmented;
