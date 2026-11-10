@@ -1681,6 +1681,57 @@ void register_ps2_gs_tests()
                      "single-circuit presentation should normalize the last row alpha");
         });
 
+        tc.Run("latched host presentation accounts for DISPLAY MAGV", [](TestCase &t)
+        {
+            std::vector<uint8_t> vram(PS2_GS_VRAM_SIZE, 0u);
+            GSRegisters regs{};
+            regs.pmode = 0x0001ull;
+            regs.dispfb1 =
+                150ull |
+                (10ull << 9) |
+                (static_cast<uint64_t>(GS_PSM_CT32) << 15);
+            // DH describes 448 output lines, but MAGV=1 displays each
+            // source line twice; only 224 VRAM rows must be read.
+            regs.display1 =
+                (1ull << 27) |
+                (639ull << 32) |
+                (447ull << 44);
+
+            GS gs;
+            gs.init(vram.data(), static_cast<uint32_t>(vram.size()), &regs);
+
+            constexpr uint32_t kLastSourcePixel =
+                0x19u |
+                (0x48u << 8) |
+                (0x76u << 16) |
+                (0x80u << 24);
+            writeReferenceFramePSMCT32Pixel(vram, 150u, 10u, 0u, 223u, kLastSourcePixel);
+            gs.latchHostPresentationFrame();
+
+            std::vector<uint8_t> latchedFrame;
+            uint32_t width = 0u;
+            uint32_t height = 0u;
+            t.IsTrue(gs.copyLatchedHostPresentationFrame(latchedFrame, width, height),
+                     "magnified single-circuit presentation should produce a host frame");
+            t.Equals(width, 640u, "MAGV must not alter source width");
+            t.Equals(height, 224u, "MAGV=1 must halve the source height");
+            t.Equals(latchedFrame.size(), static_cast<size_t>(640u * 224u * 4u),
+                     "the exported frame must stop at the last source row");
+
+            if (latchedFrame.size() >= static_cast<size_t>(640u * 224u * 4u))
+            {
+                const size_t offset = static_cast<size_t>(223u) * 640u * 4u;
+                t.Equals(static_cast<uint32_t>(latchedFrame[offset + 0u]), 0x19u,
+                         "last source row red must survive vertical magnification");
+                t.Equals(static_cast<uint32_t>(latchedFrame[offset + 1u]), 0x48u,
+                         "last source row green must survive vertical magnification");
+                t.Equals(static_cast<uint32_t>(latchedFrame[offset + 2u]), 0x76u,
+                         "last source row blue must survive vertical magnification");
+                t.Equals(static_cast<uint32_t>(latchedFrame[offset + 3u]), 0xFFu,
+                         "host output alpha must remain normalized");
+            }
+        });
+
         tc.Run("latched host presentation line-doubles interlaced field output", [](TestCase &t)
         {
             std::vector<uint8_t> vram(PS2_GS_VRAM_SIZE, 0u);

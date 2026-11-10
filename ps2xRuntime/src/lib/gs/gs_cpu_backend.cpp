@@ -320,9 +320,12 @@ namespace
         const uint32_t dw = static_cast<uint32_t>((display64 >> 32) & 0x0FFFu);
         const uint32_t dh = static_cast<uint32_t>((display64 >> 44) & 0x07FFu);
         const uint32_t magh = static_cast<uint32_t>((display64 >> 23) & 0x0Fu);
+        const uint32_t magv = static_cast<uint32_t>((display64 >> 27) & 0x03u);
 
         outWidth = (dw + 1u) / (magh + 1u);
-        outHeight = dh + 1u;
+        // DISPLAY.DH counts output lines, while VRAM is sampled at MAGV+1
+        // vertical magnification. Use source pixels for CPU presentation.
+        outHeight = (dh + 1u) / (magv + 1u);
         if (outWidth < 64u || outHeight < 64u)
         {
             outWidth = kDefaultDisplayWidth;
