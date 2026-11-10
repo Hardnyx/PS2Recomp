@@ -469,11 +469,31 @@ yet enforce MII suppression of interrupts. The new regression
 asserts that a fragmented I-bit STROW remains invisible as an
 interrupt until complete, checks all ROW/COL lanes, observes STC
 acknowledgement, and verifies register reset through guest reads.
-The candidate is checked by public
+The candidate passed public
 [compiler tests](https://github.com/Hardnyx/PS2Recomp/actions/runs/42836988445)
 and
 [KZVU tests](https://github.com/Hardnyx/PS2Recomp/actions/runs/42836988446).
-It is pending until both runs complete.
+
+### VIF1_ERR.MII command-fetch masking
+
+Fork `adbe94a` now checks VIF1_ERR.MII (bit 0) when a VIFcode
+with an I-bit is fetched. The mask suppresses that command's INT
+latch without suppressing the command's normal data or register
+effects. Fixed-width control commands, MPG and DIRECT/DIRECTHL
+retain the effective I-bit in their pending transport state.
+UNPACK's reassembled command is decoded through an internal helper
+with its original I-bit decision, so toggling MII during the upload
+does not retroactively enable or suppress the interrupt.
+
+Two regressions test immediate MARK and the fragmented control,
+MPG, DIRECT/DIRECTHL and V4-32 UNPACK families, with MII toggled
+between header and payload completion. They verify that VIF1_CODE
+still exposes the actual header and FBRST.STC acknowledges INT
+without changing ERR. The public
+[compiler run 42838798648](https://github.com/Hardnyx/PS2Recomp/actions/runs/42838798648)
+and
+[KZVU run 42838798697](https://github.com/Hardnyx/PS2Recomp/actions/runs/42838798697)
+must pass before acceptance.
 
 The pinned PCSX2 reference separates I-bit command completion,
 `VIF1_STAT.INT`/`VIS` publication, EE `INTC_VIF1` source 5 and
