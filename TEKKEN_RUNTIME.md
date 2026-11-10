@@ -439,14 +439,31 @@ cancellation before completion. The new candidate is tested via
 [public Linux/Windows workflow](https://github.com/Hardnyx/PS2Recomp/actions/runs/42776865211)
 and
 [public Windows KZVU workflow](https://github.com/Hardnyx/PS2Recomp/actions/runs/42776865197).
-Neither CI run should be treated as passed until complete.
+Both runs passed across GCC, Clang, MSVC and KZVU.
 
-The reference PS2 VIF command format places the I-bit interrupt after
-command execution. This scoped change does not implement
+Follow-up candidate `b859057` extends the completion rule to I-bit
+`STMASK`, `STROW`, `STCOL`, `MPG`, `DIRECT` and `DIRECTHL`.
+The fragment state now retains the I-bit with each incomplete command.
+Only after its last payload word is received does the parser latch
+`VIF1_STAT.INT`; `FBRST.RST` discards any unfinished command.
+The pending flag is checked through `FBRST.STC` acknowledgement
+and one reset-cancellation regression per opcode. The separate test
+fixture correction `ccca669` places command headers at transport
+boundaries rather than including payload zeros in the initial block.
+The tested candidate is `ccca669`, with public
+[compiler validation](https://github.com/Hardnyx/PS2Recomp/actions/runs/42818974734)
+and
+[KZVU validation](https://github.com/Hardnyx/PS2Recomp/actions/runs/42818974283).
+Do not declare this follow-up accepted before both runs finish.
+
+The pinned PCSX2 reference separates I-bit command completion,
+`VIF1_STAT.INT`/`VIS` publication, EE `INTC_VIF1` source 5 and
+VIF transfer suspension. This compatibility correction still only
+models the register-level completion boundary. It does not implement
 `VIF1_STAT.VIS` stall scheduling, `INTC_VIF1` delivery to the EE,
-the `VIF1_ERR.MII` mask, or cycle-accurate DMA/FIFO backpressure.
-Other data-bearing VIFcodes still use their existing IRQ behavior,
-which requires separate qualification.
+`VIF1_ERR.MII` handling or cycle-accurate DMA/FIFO backpressure.
+Those require an explicit resumable transport state before changing
+the runtime interrupt-delivery path.
 
 The buffered approach protects the final VU1 data result, but it
 does **not** model incremental visibility of UNPACK vector writes,
