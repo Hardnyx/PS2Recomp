@@ -464,8 +464,9 @@ MASK, ITOPS, BASE, OFST, TOPS, ITOP, TOP, ROW and COL fields.
 Previously `readIORegister` consulted only the CPU-write map and
 could return stale values after VIFcode execution. VIF1_ERR CPU
 writes now update the live MII/ME0/ME1 register bits (0–2), which
-are also readable through its MMIO address; the runtime does **not**
-yet enforce MII suppression of interrupts. The new regression
+are also readable through its MMIO address. The subsequent
+`adbe94a` change implements MII suppression at command fetch.
+The new regression
 asserts that a fragmented I-bit STROW remains invisible as an
 interrupt until complete, checks all ROW/COL lanes, observes STC
 acknowledgement, and verifies register reset through guest reads.
@@ -495,12 +496,27 @@ and
 [KZVU run 42838798697](https://github.com/Hardnyx/PS2Recomp/actions/runs/42838798697)
 must pass before acceptance.
 
+### FBRST reset and persistent VIF1 row/column values
+
+The pinned PCSX2 VIF1 reset implementation explicitly preserves its
+four STROW and four STCOL values while clearing command, stall, error
+and temporary transfer state. The new reset correction aligns the
+native interpreter with that behavior. It preserves all eight values
+across `FBRST.RST` without committing an incomplete replacement
+STROW/STCOL command; the next complete command can update them as
+normal. A regression checks their direct register and guest MMIO
+readbacks, the reset of VIF1_ERR/STAT, cancellation of a partial
+replacement, and execution of subsequent VIFcodes. An earlier
+MMIO fixture incorrectly expected ROW to be cleared on reset and
+is corrected by this change. The new candidate requires full
+public compiler and KZVU validation before acceptance.
+
 The pinned PCSX2 reference separates I-bit command completion,
 `VIF1_STAT.INT`/`VIS` publication, EE `INTC_VIF1` source 5 and
 VIF transfer suspension. This compatibility correction still only
 models the register-level completion boundary. It does not implement
 `VIF1_STAT.VIS` stall scheduling, `INTC_VIF1` delivery to the EE,
-`VIF1_ERR.MII` handling or cycle-accurate DMA/FIFO backpressure.
+or cycle-accurate DMA/FIFO backpressure.
 Those require an explicit resumable transport state before changing
 the runtime interrupt-delivery path.
 

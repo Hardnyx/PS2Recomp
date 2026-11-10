@@ -658,7 +658,7 @@ void register_ps2_memory_tests()
             mem.processVIF1Data(reinterpret_cast<const uint8_t *>(afterReset), sizeof(afterReset));
             t.Equals(mem.vif1_regs.mark, 0x5678u,
                      "reset must not treat subsequent commands as STROW data");
-            t.Equals(mem.vif1_regs.row[0], 0u, "reset must leave VIF row data cleared");
+            t.Equals(mem.vif1_regs.row[0], 0u, "reset must retain the initial zero value for an untouched ROW lane");
         });
 
         tc.Run("VIF1 MPG microprogram bytes resume across two DMA packets", [](TestCase &t)
@@ -1017,6 +1017,79 @@ void register_ps2_memory_tests()
                      "reset must discard the aborted UNPACK interrupt");
         });
 
+        tc.Run("VIF1 FBRST reset preserves ROW/COL despite partial replacement", [](TestCase &t)
+        {
+            PS2Memory mem;
+            t.IsTrue(mem.initialize(), "VIF1 reset-retention fixture should initialize");
+
+            const uint32_t setup[] = {
+                makeVifCmd(0x30u, 0u, 0u), 0x11111111u, 0x22222222u,
+                0x33333333u, 0x44444444u,
+                makeVifCmd(0x31u, 0u, 0u), 0xAAAA0001u, 0xAAAA0002u,
+                0xAAAA0003u, 0xAAAA0004u
+            };
+            constexpr uint32_t rowExpected[] = {
+                0x11111111u, 0x22222222u, 0x33333333u, 0x44444444u
+            };
+            constexpr uint32_t colExpected[] = {
+                0xAAAA0001u, 0xAAAA0002u, 0xAAAA0003u, 0xAAAA0004u
+            };
+            mem.processVIF1Data(reinterpret_cast<const uint8_t *>(setup),
+                                sizeof(setup));
+            t.IsTrue(mem.writeIORegister(0x10003C20u, 0x5u),
+                     "a nonzero VIF1_ERR must be writable before reset");
+
+            for (const uint8_t opcode : {uint8_t{0x30u}, uint8_t{0x31u}})
+            {
+                const uint32_t incompleteHeader[] = {
+                    0u, 0u, 0u, makeVifCmd(opcode, 0u, 0u)
+                };
+                constexpr uint32_t incompleteData[] = {0xABCD1234u, 0xDCBA4321u};
+                mem.processVIF1Data(
+                    reinterpret_cast<const uint8_t *>(incompleteHeader),
+                    sizeof(incompleteHeader));
+                mem.processVIF1Data(
+                    reinterpret_cast<const uint8_t *>(incompleteData),
+                    sizeof(incompleteData));
+                for (uint32_t i = 0u; i < 4u; ++i)
+                {
+                    t.Equals(mem.vif1_regs.row[i], rowExpected[i],
+                             "partial STROW must not replace committed ROW lanes");
+                    t.Equals(mem.vif1_regs.col[i], colExpected[i],
+                             "partial STCOL must not replace committed COL lanes");
+                }
+
+                t.IsTrue(mem.writeIORegister(0x10003C10u, 1u),
+                         "FBRST.RST must cancel the unfinished command");
+                for (uint32_t i = 0u; i < 4u; ++i)
+                {
+                    t.Equals(mem.read32(0x10003D00u + i * 0x10u), rowExpected[i],
+                             "ROW must survive FBRST.RST at its MMIO lane");
+                    t.Equals(mem.read32(0x10003D40u + i * 0x10u), colExpected[i],
+                             "COL must survive FBRST.RST at its MMIO lane");
+                }
+                t.Equals(mem.read32(0x10003C20u), 0u,
+                         "FBRST.RST must still clear VIF1_ERR");
+                t.Equals(mem.read32(0x10003C00u), 0u,
+                         "FBRST.RST must still clear VIF1_STAT");
+
+                const uint32_t mark = makeVifCmd(0x07u, 0u, 0x5678u);
+                mem.processVIF1Data(reinterpret_cast<const uint8_t *>(&mark),
+                                    sizeof(mark));
+                t.Equals(mem.read32(0x10003C30u), 0x5678u,
+                         "the parser must resume at a new VIFcode after reset");
+            }
+            const uint32_t newRow[] = {
+                makeVifCmd(0x30u, 0u, 0u), 9u, 8u, 7u, 6u
+            };
+            mem.processVIF1Data(reinterpret_cast<const uint8_t *>(newRow),
+                                sizeof(newRow));
+            t.Equals(mem.vif1_regs.row[0], 9u,
+                     "a later complete STROW may replace the retained row");
+            t.Equals(mem.vif1_regs.col[0], colExpected[0],
+                     "updating ROW after reset must not overwrite COL");
+        });
+
         tc.Run("VIF1 MMIO reads reflect parser state and register changes", [](TestCase &t)
         {
             PS2Memory mem;
@@ -1069,14 +1142,10 @@ void register_ps2_memory_tests()
                 t.Equals(mem.read32(kRow + 0x10u * i), rowPayload[i],
                          "STROW lanes must be visible through their MMIO registers");
 
-            const uint32_t colHeader[] = {
-                makeVifCmd(0x31u, 0u, 0u), 0u, 0u, 0u
-            };
             // A contiguous STCOL payload includes all four data words.
             const uint32_t colPacket[] = {
                 makeVifCmd(0x31u, 0u, 0u), 9u, 8u, 7u, 6u
             };
-            (void)colHeader;
             mem.processVIF1Data(reinterpret_cast<const uint8_t *>(colPacket),
                                 sizeof(colPacket));
             for (uint32_t i = 0u; i < 4u; ++i)
@@ -1091,7 +1160,13 @@ void register_ps2_memory_tests()
                      "FBRST.RST should reset VIF1 state");
             t.Equals(mem.read32(kMark), 0u, "reset must clear MARK readback");
             t.Equals(mem.read32(kCode), 0u, "reset must clear CODE readback");
-            t.Equals(mem.read32(kRow), 0u, "reset must clear STROW readback");
+            for (uint32_t i = 0u; i < 4u; ++i)
+            {
+                t.Equals(mem.read32(kRow + 0x10u * i), rowPayload[i],
+                         "FBRST.RST must preserve each STROW lane");
+                t.Equals(mem.read32(kCol + 0x10u * i), colPacket[i + 1u],
+                         "FBRST.RST must preserve each STCOL lane");
+            }
             t.Equals(mem.read32(kErr), 0u, "reset must clear VIF1_ERR readback");
         });
 

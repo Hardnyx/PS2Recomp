@@ -1280,7 +1280,16 @@ bool PS2Memory::writeIORegister(uint32_t address, uint32_t value)
             if (value & 0x1u) // RST
             {
                 const bool wasPath3Masked = m_path3Masked;
+                // FBRST.RST clears VIF1 command state, but the four ROW
+                // and COL values survive the reset. Games rely on these
+                // values for masked UNPACKs after a VIF reset.
+                uint32_t savedRow[4];
+                uint32_t savedCol[4];
+                std::memcpy(savedRow, vif1_regs.row, sizeof(savedRow));
+                std::memcpy(savedCol, vif1_regs.col, sizeof(savedCol));
                 std::memset(&vif1_regs, 0, sizeof(vif1_regs));
+                std::memcpy(vif1_regs.row, savedRow, sizeof(savedRow));
+                std::memcpy(vif1_regs.col, savedCol, sizeof(savedCol));
                 m_vif1PendingPath2ImageQwc = 0u;
                 m_vif1PendingPath2DirectHl = false;
                 m_vif1PendingRegister = Vif1PendingRegister::None;
