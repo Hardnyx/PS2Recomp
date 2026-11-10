@@ -387,11 +387,33 @@ unfinished DIRECTHL by FBRST.RST. The candidate is exercised by
 and [public KZVU regression](https://github.com/Hardnyx/PS2Recomp/actions/runs/42769804869).
 These jobs must pass before acceptance.
 
-Incomplete commands are buffered until their final byte; this
+Incomplete DIRECT commands are buffered until their final byte; this
 does **not** reproduce the PS2's incremental GIF FIFO visibility,
-cycle timing, backpressure or VIF stall status. UNPACK and other
-variable-length VIFcodes still need split-chain tests and hardware
-or reference comparison before changing DMA scheduling.
+cycle timing, backpressure or VIF stall status.
+
+### Split VIF1 UNPACK payloads
+
+Fork candidate `f5c4d0f` retains at most one incomplete UNPACK
+command (four command bytes plus up to 4096 bytes of padded VU1
+source data). When the remaining data arrives in later DMA fragments,
+the completed packet reuses the original decoder instead of
+duplicating STCYCL skip/fill, STMOD, masks, zero extension and
+TOPS address handling. It does not write partial vectors to VU1 data
+memory. `VIF1_FBRST.RST` discards any incomplete UNPACK.
+
+Regressions cover V4-32 vectors split over multiple qwords, V4-16
+signed/unsigned extension across a fragment, masked fill cycles,
+a trailing MARK command, and reset cancellation. The exact revision is
+being validated by
+[public Linux/Windows build](https://github.com/Hardnyx/PS2Recomp/actions/runs/42772109537)
+and
+[public KZVU tests](https://github.com/Hardnyx/PS2Recomp/actions/runs/42772109524).
+These tests must complete before the candidate is accepted.
+
+The buffered approach protects the final VU1 data result, but it
+does **not** model incremental visibility of UNPACK vector writes,
+VIF1 FIFO capacity, VU1 contention, VIF stalls, or DMA cycle timing.
+Those remain separate hardware/reference acceptance gates.
 
 ## Windows regression commands
 
