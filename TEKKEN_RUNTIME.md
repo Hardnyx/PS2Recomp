@@ -454,7 +454,26 @@ The tested candidate is `ccca669`, with public
 [compiler validation](https://github.com/Hardnyx/PS2Recomp/actions/runs/42818974734)
 and
 [KZVU validation](https://github.com/Hardnyx/PS2Recomp/actions/runs/42818974283).
-Do not declare this follow-up accepted before both runs finish.
+Both workflows passed for the exact tested revision `ccca669`.
+
+### EE-visible VIF1 register readback
+
+Fork `b15acef` makes guest MMIO reads at VIF1 register offsets
+observe the interpreter's live STAT, CODE, MARK, CYCLE, MODE, NUM,
+MASK, ITOPS, BASE, OFST, TOPS, ITOP, TOP, ROW and COL fields.
+Previously `readIORegister` consulted only the CPU-write map and
+could return stale values after VIFcode execution. VIF1_ERR CPU
+writes now update the live MII/ME0/ME1 register bits (0–2), which
+are also readable through its MMIO address; the runtime does **not**
+yet enforce MII suppression of interrupts. The new regression
+asserts that a fragmented I-bit STROW remains invisible as an
+interrupt until complete, checks all ROW/COL lanes, observes STC
+acknowledgement, and verifies register reset through guest reads.
+The candidate is checked by public
+[compiler tests](https://github.com/Hardnyx/PS2Recomp/actions/runs/42836988445)
+and
+[KZVU tests](https://github.com/Hardnyx/PS2Recomp/actions/runs/42836988446).
+It is pending until both runs complete.
 
 The pinned PCSX2 reference separates I-bit command completion,
 `VIF1_STAT.INT`/`VIS` publication, EE `INTC_VIF1` source 5 and
