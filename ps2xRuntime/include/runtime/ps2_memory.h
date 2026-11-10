@@ -415,6 +415,7 @@ public:
     bool m_path3Masked = false;
     uint32_t m_vif1PendingPath2ImageQwc = 0u;
     bool m_vif1PendingPath2ImageEop = false;
+    uint8_t m_vif1PendingPath2ImageFlg = 2u;
     // DIRECT can end four bytes into a DMA quadword. Preserve a partial
     // 16-byte IMAGE continuation until the next DMA supplies its tail.
     std::array<uint8_t, 16> m_vif1PendingPath2ImagePartial{};

@@ -2854,7 +2854,7 @@ void register_ps2_memory_tests()
                      "polling again must not requeue the completed DMAC interrupt");
         });
 
-        tc.Run("VIF1 PATH2 IMAGE continuation retains the original GIF EOP", [](TestCase &t)
+        tc.Run("VIF1 PATH2 IMAGE continuation retains original GIF flags", [](TestCase &t)
         {
             constexpr uint32_t kChannel = 0x10009000u;
             constexpr uint32_t kDStat = 0x1000E010u;
@@ -2863,6 +2863,8 @@ void register_ps2_memory_tests()
             {
                 for (const bool eop : {false, true})
                 {
+                  for (const uint8_t flg : {uint8_t{GIF_FMT_IMAGE}, uint8_t{3u}})
+                  {
                     PS2Memory mem;
                     t.IsTrue(mem.initialize(), "IMAGE EOP continuation fixture should initialize");
                     const uint8_t opcode = partialImage ? 0x50u : 0x51u;
@@ -2874,7 +2876,7 @@ void register_ps2_memory_tests()
                             appendU32(stream, 0u);
                     }
                     appendU32(stream, makeVifCmd(opcode, 0u, 1u));
-                    appendU64(stream, makeGifTag(1u, GIF_FMT_IMAGE, 0u, eop));
+                    appendU64(stream, makeGifTag(1u, flg, 0u, eop));
                     appendU64(stream, 0u);
                     const size_t imageOffset = stream.size();
                     for (uint32_t i = 0u; i < 16u; ++i)
@@ -2918,6 +2920,8 @@ void register_ps2_memory_tests()
                             std::memcpy(&finalTag, packets[1].data(), sizeof(finalTag));
                             t.Equals((finalTag & (1ull << 15u)) != 0ull, eop,
                                      "reconstructed IMAGE EOP must match its original GIFtag");
+                            t.Equals(static_cast<uint8_t>((finalTag >> 58u) & 3ull), flg,
+                                     "reconstructed IMAGE FLG must retain the source format");
                             t.IsTrue(std::memcmp(packets[1].data() + 16u,
                                                  stream.data() + imageOffset, 16u) == 0,
                                      "IMAGE continuation must preserve the source bytes");
@@ -2928,6 +2932,7 @@ void register_ps2_memory_tests()
                     t.Equals(mem.consumeCompletedDmacCauses().size(),
                              static_cast<size_t>(parts),
                              "every IMAGE transport must complete exactly once");
+                  }
                 }
             }
         });
