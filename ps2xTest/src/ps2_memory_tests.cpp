@@ -2132,6 +2132,91 @@ void register_ps2_memory_tests()
             t.Equals(order[2], static_cast<uint8_t>(0x33u), "PATH3 should be drained third");
         });
 
+        tc.Run("VIF1 DMA completes after retaining a partial command payload", [](TestCase &t)
+        {
+            constexpr uint32_t kChannel = 0x10009000u;
+            constexpr uint32_t kDStat = 0x1000E010u;
+            constexpr uint32_t kSource = 0x0002B800u;
+            struct Command
+            {
+                uint8_t opcode;
+                uint8_t num;
+                uint16_t imm;
+            };
+            constexpr Command commands[] = {
+                {0x30u, 0u, 0u},     // STROW
+                {0x31u, 0u, 0u},     // STCOL
+                {0x50u, 0u, 1u},    // DIRECT
+                {0x51u, 0u, 1u},    // DIRECTHL
+                {0x6Cu, 1u, 0x20u}  // UNPACK V4-32
+            };
+            for (const Command &cmd : commands)
+            {
+                PS2Memory mem;
+                t.IsTrue(mem.initialize(), "split VIF1 command fixture should initialize");
+                const uint32_t blocks[][4] = {
+                    {makeVifCmd(cmd.opcode, cmd.num, cmd.imm),
+                     0x00008000u, 0x11223344u, 0x55667788u},
+                    {0x99AABBCCu, makeVifCmd(0x07u, 0u, 0xABCDu), 0u, 0u}
+                };
+                std::memcpy(mem.getRDRAM() + kSource, blocks, sizeof(blocks));
+                const uint8_t *expected =
+                    reinterpret_cast<const uint8_t *>(&blocks[0][1]);
+                std::vector<std::vector<uint8_t>> gifPackets;
+                mem.setGifPacketCallback([&](const uint8_t *data, uint32_t count)
+                {
+                    gifPackets.emplace_back(data, data + count);
+                });
+
+                for (uint32_t part = 0u; part < 2u; ++part)
+                {
+                    mem.writeIORegister(kChannel + 0x10u, kSource + part * 16u);
+                    mem.writeIORegister(kChannel + 0x20u, 1u);
+                    mem.writeIORegister(kChannel, 0x100u);
+                    t.Equals(mem.readIORegister(kChannel + 0x20u), 0u,
+                             "each DMA must consume its retained payload bytes");
+                    t.Equals(mem.readIORegister(kChannel) & 0x100u, 0u,
+                             "each transport must clear STR without replaying data");
+                    t.IsTrue((mem.readIORegister(kDStat) & 2u) != 0u,
+                             "partial VIF commands must not defer DMA completion");
+                    t.Equals(mem.consumeCompletedDmacCauses().size(),
+                             static_cast<size_t>(1u),
+                             "each transport must report one completion");
+                    mem.write32(kDStat, 2u);
+                    if (part == 0u)
+                        t.Equals(mem.vif1_regs.mark, 0u,
+                                 "a trailing MARK cannot run before the continuation");
+                }
+
+                t.Equals(mem.vif1_regs.mark, 0xABCDu,
+                         "the VIFcode after the final payload word must execute");
+                if (cmd.opcode == 0x30u)
+                    t.IsTrue(std::memcmp(mem.vif1_regs.row, expected, 16u) == 0,
+                             "split STROW must preserve all four payload words");
+                else if (cmd.opcode == 0x31u)
+                    t.IsTrue(std::memcmp(mem.vif1_regs.col, expected, 16u) == 0,
+                             "split STCOL must preserve all four payload words");
+                else if (cmd.opcode == 0x6Cu)
+                    t.IsTrue(std::memcmp(mem.getVU1Data() + 0x20u * 16u,
+                                         expected, 16u) == 0,
+                             "split UNPACK must preserve the complete vector");
+                else
+                {
+                    t.Equals(gifPackets.size(), static_cast<size_t>(1u),
+                             "split DIRECT must submit exactly one GIF packet");
+                    if (gifPackets.size() == 1u)
+                    {
+                        t.Equals(gifPackets[0].size(), static_cast<size_t>(16u),
+                                 "split DIRECT must submit one complete quadword");
+                        if (gifPackets[0].size() == 16u)
+                            t.IsTrue(std::memcmp(gifPackets[0].data(), expected,
+                                                 16u) == 0,
+                                     "DIRECT and DIRECTHL must preserve the GIF bytes");
+                    }
+                }
+            }
+        });
+
         tc.Run("VIF1 DMA resumes split DIRECT and DIRECTHL payloads", [](TestCase &t)
         {
             constexpr uint32_t kVif1Ch = 0x10009000u;

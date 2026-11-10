@@ -442,6 +442,8 @@ uint32_t PS2Memory::processVIF1DataImpl(const uint8_t *data, uint32_t sizeBytes,
         if (remaining != 0u)
             std::memcpy(m_vif1PendingRegisterData.data(), data + pos, remaining);
         m_vif1PendingRegisterIrq = irq;
+        // The retained tail has already been read from this DMA packet.
+        pos = sizeBytes;
     };
 
     while (pos + 4 <= sizeBytes)
@@ -708,6 +710,8 @@ uint32_t PS2Memory::processVIF1DataImpl(const uint8_t *data, uint32_t sizeBytes,
                 m_vif1PendingDirectBytes = expectedBytes - available;
                 m_vif1PendingDirectHl = directHl;
                 m_vif1PendingDirectIrq = irq;
+                // The partial GIF payload belongs to the current DMA.
+                pos += available;
                 break;
             }
 
@@ -785,6 +789,8 @@ uint32_t PS2Memory::processVIF1DataImpl(const uint8_t *data, uint32_t sizeBytes,
                                 data + pos, available);
                 m_vif1PendingUnpackBytes = totalBytes - available;
                 m_vif1PendingUnpackIrq = irq;
+                // Consumed bytes cannot be replayed by the DMA channel.
+                pos += available;
                 break;
             }
 
