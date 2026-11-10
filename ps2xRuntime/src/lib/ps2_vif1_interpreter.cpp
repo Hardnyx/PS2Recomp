@@ -414,8 +414,11 @@ uint32_t PS2Memory::processVIF1DataImpl(const uint8_t *data, uint32_t sizeBytes,
         // tail from the following tag. Unlike IMAGE, these register formats
         // cannot be resumed by inventing a new GIFtag for the remaining
         // data: the GS must retain the original register sequence.
+        // The direct-buffer replay API also forwards arbitrary GIF quadwords.
+        // Infer an incomplete PACKED/REGLIST tag only for real VIF1 DMA,
+        // where a later DIRECT command supplies its missing payload.
         uint32_t at = 0u;
-        while (at + 16u <= bytes)
+        while (m_vif1DmaProcessing && at + 16u <= bytes)
         {
             uint64_t tagLo = 0u;
             std::memcpy(&tagLo, payload + at, sizeof(tagLo));
