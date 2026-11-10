@@ -824,8 +824,8 @@ void register_ps2_memory_tests()
                 PS2Memory mem;
                 t.IsTrue(mem.initialize(), "fragmented I-bit VIF1 fixture should initialize");
                 const uint32_t header[] = {
-                    makeVifCmd(tcData.opcode, tcData.num, tcData.imm) | 0x80000000u,
-                    0u, 0u, 0u
+                    0u, 0u, 0u,
+                    makeVifCmd(tcData.opcode, tcData.num, tcData.imm) | 0x80000000u
                 };
                 mem.processVIF1Data(reinterpret_cast<const uint8_t *>(header),
                                     sizeof(header));
@@ -863,7 +863,7 @@ void register_ps2_memory_tests()
                 const uint8_t num = (opcode == 0x4Au) ? 2u : 0u;
                 const uint16_t imm = (opcode == 0x50u || opcode == 0x51u) ? 1u : 0u;
                 const uint32_t packet[] = {
-                    makeVifCmd(opcode, num, imm) | 0x80000000u, 0u, 0u, 0u
+                    0u, 0u, 0u, makeVifCmd(opcode, num, imm) | 0x80000000u
                 };
                 mem.processVIF1Data(reinterpret_cast<const uint8_t *>(packet),
                                     sizeof(packet));
