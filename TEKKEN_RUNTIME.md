@@ -403,12 +403,24 @@ memory. `VIF1_FBRST.RST` discards any incomplete UNPACK.
 
 Regressions cover V4-32 vectors split over multiple qwords, V4-16
 signed/unsigned extension across a fragment, masked fill cycles,
-a trailing MARK command, and reset cancellation. The exact revision is
-being validated by
-[public Linux/Windows build](https://github.com/Hardnyx/PS2Recomp/actions/runs/42772109537)
+a trailing MARK command, and reset cancellation. Clang rejected
+the first test fixtures because they used `constexpr` arrays with
+non-constexpr `makeVifCmd`; fork `37b456b` changed those inputs to
+`const`. Both final public runs passed:
+[Linux GCC/Clang and Windows MSVC](https://github.com/Hardnyx/PS2Recomp/actions/runs/42772574902)
 and
-[public KZVU tests](https://github.com/Hardnyx/PS2Recomp/actions/runs/42772109524).
-These tests must complete before the candidate is accepted.
+[Windows KZVU](https://github.com/Hardnyx/PS2Recomp/actions/runs/42772575033).
+
+The subsequent test-only candidate `90b095d` drives the same fragmented
+V4-32 stream through four actual VIF1 channel starts using MADR/QWC/CHCR.
+It checks the unchanged VU1 data before completion, the resulting
+vectors against a contiguous baseline, trailing MARK ordering,
+synchronous DMA status and one completion notification per transport
+packet. The public
+[Linux/Windows build](https://github.com/Hardnyx/PS2Recomp/actions/runs/42775869628)
+and
+[KZVU reference regression](https://github.com/Hardnyx/PS2Recomp/actions/runs/42775869506)
+are required before accepting this additional DMA integration control.
 
 The buffered approach protects the final VU1 data result, but it
 does **not** model incremental visibility of UNPACK vector writes,
