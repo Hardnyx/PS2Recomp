@@ -370,10 +370,28 @@ between them and a subsequent MARK command; a separate case checks
 reset cancellation. Port commit `de74f31` selects this revision in
 [Windows run 42727047294](https://github.com/Hardnyx/TekkenTagPort/actions/runs/42727047294).
 
-The remaining streaming gaps include UNPACK, DIRECT and other
-variable-length VIFcodes. These require separate split-chain tests,
-hardware/reference comparison, and asynchronous DMA qualification
-before altering runtime timing.
+A later candidate, `164df05`, preserves a DIRECT/DIRECTHL GIF
+payload that ends between VIF1 DMA blocks, including cuts inside a
+16-byte GIF quadword. The parser buffers only incomplete DIRECT
+commands; when their declared payload arrives it forwards one
+complete PATH2 packet to the existing GIF callback or arbiter. This
+keeps PACKED/REGLIST/IMAGE payload bytes from being mistaken for new
+GIF tags at intermediate transport boundaries. The fragment retains
+the DIRECTHL arbitration flag; VIF1_FBRST.RST cancels it.
+
+Three new tests cover two-QW DIRECT and DIRECTHL commands across
+multiple normal-mode DMA starts, a twelve-byte fragment followed by
+a four-byte completion and trailing MARK, and cancellation of an
+unfinished DIRECTHL by FBRST.RST. The candidate is exercised by
+[public Windows/Linux build](https://github.com/Hardnyx/PS2Recomp/actions/runs/42769804880)
+and [public KZVU regression](https://github.com/Hardnyx/PS2Recomp/actions/runs/42769804869).
+These jobs must pass before acceptance.
+
+Incomplete commands are buffered until their final byte; this
+does **not** reproduce the PS2's incremental GIF FIFO visibility,
+cycle timing, backpressure or VIF stall status. UNPACK and other
+variable-length VIFcodes still need split-chain tests and hardware
+or reference comparison before changing DMA scheduling.
 
 ## Windows regression commands
 
