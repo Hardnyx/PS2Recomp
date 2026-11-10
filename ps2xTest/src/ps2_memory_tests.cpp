@@ -741,7 +741,7 @@ void register_ps2_memory_tests()
             t.IsTrue(fragmented.initialize(), "fragmented VIF1 fixture should initialize");
             t.IsTrue(contiguous.initialize(), "contiguous VIF1 fixture should initialize");
 
-            constexpr uint32_t blocks[][4] = {
+            const uint32_t blocks[][4] = {
                 {makeVifCmd(0x07u, 0u, 0x1111u), 0u, 0u,
                  makeVifCmd(0x6Cu, 2u, 0x0020u)},
                 {0x11111111u, 0x22222222u, 0x33333333u, 0x44444444u},
@@ -815,7 +815,7 @@ void register_ps2_memory_tests()
                 for (uint32_t i = 0u; i < 4u; ++i)
                     target->vif1_regs.row[i] = 10u + i;
             }
-            constexpr uint32_t blocks[][4] = {
+            const uint32_t blocks[][4] = {
                 {0u, 0u, makeVifCmd(0x7Cu, 3u, 0u), 0xAAAABBBBu},
                 {0xCCCCDDDDu, 0xEEEEFFFFu, 0x12345678u,
                  makeVifCmd(0x07u, 0u, 0x2468u)}
@@ -841,10 +841,10 @@ void register_ps2_memory_tests()
         {
             PS2Memory mem;
             t.IsTrue(mem.initialize(), "UNPACK reset fixture should initialize");
-            constexpr uint32_t partial[] = {
+            const uint32_t partial[] = {
                 makeVifCmd(0x6Cu, 2u, 0u), 1u, 2u, 3u
             };
-            constexpr uint32_t following[] = {
+            const uint32_t following[] = {
                 makeVifCmd(0x07u, 0u, 0x4321u), 0u, 0u, 0u
             };
             mem.processVIF1Data(reinterpret_cast<const uint8_t *>(partial), 16u);
