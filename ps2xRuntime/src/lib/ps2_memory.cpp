@@ -1276,6 +1276,11 @@ bool PS2Memory::writeIORegister(uint32_t address, uint32_t value)
 
         switch (address)
         {
+        case 0x10003C00u: // VIF1_STAT: FDR is the only software-writable bit.
+            // Keep VPS, DBF, INT, MRK and FIFO flags under VIF1 control.
+            vif1_regs.stat = (vif1_regs.stat & ~(1u << 23)) |
+                             (value & (1u << 23));
+            break;
         case 0x10003C10u:     // VIF1_FBRST
             if (value & 0x1u) // RST
             {

@@ -520,6 +520,19 @@ or cycle-accurate DMA/FIFO backpressure.
 Those require an explicit resumable transport state before changing
 the runtime interrupt-delivery path.
 
+### VIF1_STAT FIFO-direction write mask
+
+The VIF1_STAT register permits software writes only to FDR (bit 23).
+This correction routes guest register writes through the
+live VIF1 status word and preserves all other flags (including INT,
+MRK and DBF). Byte/halfword stores retain untouched lanes; FBRST.STC
+acknowledges its documented stall/interrupt flags without clearing
+FDR, whereas FBRST.RST resets FDR. The regression covers direct MMIO
+writes, subword stores, interrupt acknowledgement and reset.
+The direction bit is now guest-visible but reverse FIFO transfers and
+DMA stall/resumption are not yet modeled; this is a register
+compatibility change, not VIS or INTC_VIF1 support.
+
 The buffered approach protects the final VU1 data result, but it
 does **not** model incremental visibility of UNPACK vector writes,
 VIF1 FIFO capacity, VU1 contention, VIF stalls, or DMA cycle timing.

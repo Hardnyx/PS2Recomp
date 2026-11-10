@@ -1568,6 +1568,55 @@ void register_ps2_memory_tests()
             }
         });
 
+        tc.Run("VIF1_STAT writes affect only FIFO direction", [](TestCase &t)
+        {
+            PS2Memory mem;
+            t.IsTrue(mem.initialize(), "VIF1 STAT write fixture should initialize");
+            constexpr uint32_t kStat = 0x10003C00u;
+            constexpr uint32_t kFbrst = 0x10003C10u;
+            constexpr uint32_t kFdr = 1u << 23u;
+            constexpr uint32_t kInt = 1u << 11u;
+            constexpr uint32_t kMrk = 1u << 6u;
+            constexpr uint32_t kDbf = 1u << 7u;
+
+            const uint32_t markI = makeVifCmd(0x07u, 0u, 0x1357u) | 0x80000000u;
+            mem.processVIF1Data(reinterpret_cast<const uint8_t *>(&markI),
+                                sizeof(markI));
+            t.Equals(mem.read32(kStat) & (kInt | kMrk), kInt | kMrk,
+                     "MARK with an I-bit should publish interrupt and marker flags");
+            // Set the hardware-controlled DBF flag to test its write mask.
+            mem.vif1_regs.stat |= kDbf;
+            const uint32_t prior = mem.read32(kStat);
+
+            t.IsTrue(mem.writeIORegister(kStat, 0xFFFFFFFFu),
+                     "VIF1_STAT must accept guest register stores");
+            t.Equals(mem.read32(kStat), prior | kFdr,
+                     "all-one write must set FDR without modifying read-only flags");
+
+            t.IsTrue(mem.writeIORegister(kStat, kInt | kMrk),
+                     "write with read-only flag bits must be accepted");
+            t.Equals(mem.read32(kStat), prior,
+                     "FDR zero must clear direction while preserving INT, MRK and DBF");
+
+            mem.write32(kStat, kFdr);
+            t.Equals(mem.read32(kStat), prior | kFdr,
+                     "standard MMIO write32 must update the live FDR flag");
+            mem.write8(kStat, 0u);
+            t.Equals(mem.read32(kStat), prior | kFdr,
+                     "a low-byte write must not clear unrelated high-byte FDR");
+            mem.write16(kStat + 2u, 0u);
+            t.Equals(mem.read32(kStat), prior,
+                     "an upper halfword write must update the FDR bit");
+
+            mem.write32(kStat, kFdr);
+            mem.write32(kFbrst, 0x8u);
+            t.Equals(mem.read32(kStat), (prior & ~kInt) | kFdr,
+                     "FBRST.STC must acknowledge INT without clearing FIFO direction");
+            mem.write32(kFbrst, 1u);
+            t.Equals(mem.read32(kStat), 0u,
+                     "FBRST.RST must reset FIFO direction and all status flags");
+        });
+
         tc.Run("VIF irq command sets STAT.INT and CODE until FBRST.STC clears it", [](TestCase &t)
         {
             PS2Memory mem;
