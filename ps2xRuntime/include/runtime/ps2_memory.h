@@ -421,6 +421,10 @@ public:
     std::array<uint8_t, 16> m_vif1PendingPath2ImagePartial{};
     uint32_t m_vif1PendingPath2ImagePartialBytes = 0u;
     bool m_vif1PendingPath2DirectHl = false;
+    // Retained complete GIFtag and partial PACKED/REGLIST register data.
+    // The remaining count includes the declared REGLIST pad when present.
+    std::vector<uint8_t> m_vif1PendingPath2Packet;
+    uint32_t m_vif1PendingPath2PacketBytes = 0u;
 
     // VIF1 DMA chains can split a fixed-width VIFcode payload across
     // transport qwords. Retain it until complete, never decode its words

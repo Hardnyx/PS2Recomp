@@ -355,6 +355,27 @@ uint32_t PS2Memory::processVIF1DataImpl(const uint8_t *data, uint32_t sizeBytes,
     // declared quadwords enter GIF PATH2: intervening VIFcodes remain VIFcodes.
     const auto submitDirectPayload = [&](const uint8_t *payload, uint32_t bytes, bool directHl)
     {
+        // GIF PACKED and REGLIST may end halfway through their register
+        // payload. Keep the original tag until a subsequent DIRECT supplies
+        // every declared qword; otherwise the GS treats a continuation as
+        // a new GIFtag.
+        if (m_vif1PendingPath2PacketBytes != 0u)
+        {
+            const uint32_t copied = std::min(m_vif1PendingPath2PacketBytes, bytes);
+            m_vif1PendingPath2Packet.insert(m_vif1PendingPath2Packet.end(),
+                                            payload, payload + copied);
+            m_vif1PendingPath2PacketBytes -= copied;
+            payload += copied;
+            bytes -= copied;
+            if (m_vif1PendingPath2PacketBytes != 0u)
+                return;
+
+            submitGifPacket(GifPathId::Path2, m_vif1PendingPath2Packet.data(),
+                            static_cast<uint32_t>(m_vif1PendingPath2Packet.size()),
+                            true, directHl);
+            m_vif1PendingPath2Packet.clear();
+        }
+
         if (m_vif1PendingPath2ImageQwc != 0u)
         {
             const uint32_t chunkQw =
@@ -388,6 +409,48 @@ uint32_t PS2Memory::processVIF1DataImpl(const uint8_t *data, uint32_t sizeBytes,
 
         if (bytes == 0u)
             return;
+
+        // Scan complete GIFtags to distinguish a partial PACKED/REGLIST
+        // tail from the following tag. Unlike IMAGE, these register formats
+        // cannot be resumed by inventing a new GIFtag for the remaining
+        // data: the GS must retain the original register sequence.
+        uint32_t at = 0u;
+        while (at + 16u <= bytes)
+        {
+            uint64_t tagLo = 0u;
+            std::memcpy(&tagLo, payload + at, sizeof(tagLo));
+            const uint32_t nloop = static_cast<uint32_t>(tagLo & 0x7FFFu);
+            uint32_t nreg = static_cast<uint32_t>((tagLo >> 60u) & 0xFu);
+            if (nreg == 0u)
+                nreg = 16u;
+            const uint8_t flg = static_cast<uint8_t>((tagLo >> 58u) & 3u);
+
+            uint64_t payloadBytes = 0u;
+            if (flg == 0u)
+                payloadBytes = static_cast<uint64_t>(nloop) * nreg * 16ull;
+            else if (flg == 1u)
+                payloadBytes = ((static_cast<uint64_t>(nloop) * nreg * 8ull) + 15ull) & ~15ull;
+            else
+                payloadBytes = static_cast<uint64_t>(nloop) * 16ull;
+
+            const uint32_t available = bytes - at - 16u;
+            if (payloadBytes > available)
+            {
+                if (flg == 0u || flg == 1u)
+                {
+                    if (at != 0u)
+                        submitGifPacket(GifPathId::Path2, payload, at, true, directHl);
+                    m_vif1PendingPath2Packet.assign(payload + at, payload + bytes);
+                    m_vif1PendingPath2PacketBytes =
+                        static_cast<uint32_t>(payloadBytes - available);
+                    return;
+                }
+                // IMAGE keeps its established streaming path and EOP/FLG
+                // continuation handling below.
+                break;
+            }
+            at += 16u + static_cast<uint32_t>(payloadBytes);
+        }
 
         submitGifPacket(GifPathId::Path2, payload, bytes, true, directHl);
         bool imageEop = false;
