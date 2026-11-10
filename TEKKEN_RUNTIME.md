@@ -338,6 +338,32 @@ asynchronous VU1, nor does it validate EE/VU clock overlap or GPU
 packet arrival timing. Production scheduling and hardware register
 semantics were not changed by this test.
 
+## VIF1 fixed-size command payloads across DMA fragments
+
+Fork candidate `a528c18` retains the unfinished payloads of VIF1
+`STMASK` (one word), `STROW` (four words), and `STCOL` (four words)
+when a command reaches a DMA qword boundary. The interpreter now
+consumes those data words before decoding a subsequent opcode and
+only publishes the destination register after the entire fixed-size
+payload arrives. Initialization and `VIF1_FBRST.RST` discard any
+incomplete command state.
+
+Two tests cover five consecutive 16-byte fragments with payloads
+split across different boundaries, and reset cancellation of a
+partial `STROW`. Port commit `284c3e9` pins this fork for
+[Windows run 42726369693](https://github.com/Hardnyx/TekkenTagPort/actions/runs/42726369693).
+The earlier VIF1 callback regression incorrectly assumed that
+`processPendingTransfers()` starts a VIF1 DMA after `CHCR.STR` is
+written. VIF1 currently processes synchronously at the CHCR write.
+Fork commit `dce5c4f` corrects the test to observe QWC and D_STAT
+at the actual callback boundary; this is a test correction, not an
+asynchronous DMA implementation.
+
+This fix is limited to the three fixed-width commands. It does not
+introduce complete streaming state for MPG, UNPACK, DIRECT or other
+variable-length VIFcodes. Those still require independent split-chain
+tests and a hardware/reference comparison before changing DMA timing.
+
 ## Windows regression commands
 
 Run from the fork root in an initialized MSVC x64 tools environment. These
