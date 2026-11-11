@@ -1528,6 +1528,54 @@ void register_ps2_gs_tests()
                      "direct CT32 presentation should normalize row 1 alpha for the host frame");
         });
 
+        tc.Run("explicit black DISPFB page zero must not fall back to draw contexts", [](TestCase &t)
+        {
+            std::vector<uint8_t> vram(PS2_GS_VRAM_SIZE, 0u);
+            GSRegisters regs{};
+            regs.pmode = 0x0001ull;
+            // FBW=10 explicitly selects page zero for scanout.
+            regs.dispfb1 = (10ull << 9) |
+                (static_cast<uint64_t>(GS_PSM_CT32) << 15);
+            regs.display1 = (639ull << 32) | (447ull << 44);
+
+            GS gs;
+            gs.init(vram.data(), static_cast<uint32_t>(vram.size()), &regs);
+
+            constexpr uint32_t kDrawFbp = 150u;
+            constexpr uint64_t kDrawFrame =
+                static_cast<uint64_t>(kDrawFbp) |
+                (10ull << 16) |
+                (static_cast<uint64_t>(GS_PSM_CT32) << 24);
+            gs.writeRegister(GS_REG_FRAME_1, kDrawFrame);
+            writeReferenceFramePSMCT32Pixel(vram, kDrawFbp, 10u, 0u, 0u,
+                                            0xFF3366CCu);
+
+            gs.latchHostPresentationFrame();
+            std::vector<uint8_t> pixels;
+            uint32_t width = 0u, height = 0u, displayFbp = 0xFFFFFFFFu;
+            uint32_t sourceFbp = 0xFFFFFFFFu;
+            bool usedPreferred = true;
+            t.IsTrue(gs.copyLatchedHostPresentationFrame(
+                         pixels, width, height, &displayFbp, &sourceFbp, &usedPreferred),
+                     "explicitly configured black display page should still present");
+            t.Equals(displayFbp, 0u, "DISPLAY must remain sourced from page zero");
+            t.Equals(sourceFbp, 0u, "black page zero must not alias the draw target");
+            t.IsFalse(usedPreferred, "context substitution must not masquerade as a preferred source");
+            t.Equals(width, 640u, "display width must remain configured");
+            t.Equals(height, 448u, "display height must remain configured");
+            if (pixels.size() >= 4u)
+            {
+                t.Equals(static_cast<uint32_t>(pixels[0]), 0u,
+                         "black scanout must not inherit the other framebuffer's red channel");
+                t.Equals(static_cast<uint32_t>(pixels[1]), 0u,
+                         "black scanout must not inherit the other framebuffer's green channel");
+                t.Equals(static_cast<uint32_t>(pixels[2]), 0u,
+                         "black scanout must not inherit the other framebuffer's blue channel");
+                t.Equals(static_cast<uint32_t>(pixels[3]), 255u,
+                         "host alpha must remain normalized");
+            }
+        });
+
         tc.Run("latched host presentation merges both enabled PMODE circuits", [](TestCase &t)
         {
             std::vector<uint8_t> vram(PS2_GS_VRAM_SIZE, 0u);

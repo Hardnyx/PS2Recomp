@@ -1902,9 +1902,14 @@ PresentationFrame GSCpuBackend::PresentFromLocalMemory(const GSPresentationReque
         if (pixels.empty() && !CopyFrameToHostRgba(displayFrame, width, height, pixels, preserveAlpha, true, true, origin.x, origin.y))
             return false;
 
-        if (!usedPreferred && displayFrame.fbp == 0u && countNonBlackPixels(pixels, width, height) == 0u)
+        // Page zero is a valid display framebuffer. Do not replace an
+        // explicitly configured black DISPFB page with an unrelated draw
+        // context just because that context contains colored pixels.
+        // Retain the legacy fallback only for an incomplete display width.
+        if (!usedPreferred && displayFrame.fbp == 0u && displayFrame.fbw == 0u &&
+            countNonBlackPixels(pixels, width, height) == 0u)
         {
-            for (const GSFrameReg &candidate : request.contextFrames)
+            for (const GSFrameReg &candidate : request.contextFrames
             {
                 if (candidate.fbp == selected.fbp && candidate.fbw == selected.fbw && candidate.psm == selected.psm)
                     continue;
