@@ -1253,6 +1253,56 @@ void register_ps2_gs_tests()
             drawUvCopy(kUv0, kUv1);
             t.IsTrue(gs.getPreferredDisplaySource(preferredSource, preferredDestFbp),
                      "the unshifted full-coverage copy should remain eligible");
+
+            gs.WriteVram(GS_PSM_CT32, 150u, 10u, 0u, 0u, 0xFF123456u);
+            t.IsFalse(gs.getPreferredDisplaySource(preferredSource, preferredDestFbp),
+                      "direct VRAM writes must invalidate the preferred scanout source");
+
+            drawUvCopy(kUv0, kUv1);
+            t.IsTrue(gs.getPreferredDisplaySource(preferredSource, preferredDestFbp),
+                     "a later valid fullscreen draw may establish a new source");
+
+            constexpr uint64_t kTransferBitBlt =
+                (10ull << 16) |
+                (static_cast<uint64_t>(GS_PSM_CT32) << 24) |
+                (150ull << 32) |
+                (10ull << 48) |
+                (static_cast<uint64_t>(GS_PSM_CT32) << 56);
+            constexpr uint64_t kOnePixel = 1ull | (1ull << 32);
+            gs.writeRegister(GS_REG_BITBLTBUF, kTransferBitBlt);
+            gs.writeRegister(GS_REG_TRXPOS, 0ull);
+            gs.writeRegister(GS_REG_TRXREG, kOnePixel);
+            gs.writeRegister(GS_REG_TRXDIR, 2ull);
+            t.IsFalse(gs.getPreferredDisplaySource(preferredSource, preferredDestFbp),
+                      "a local-to-local VRAM transfer must invalidate the selected scanout source");
+
+            drawUvCopy(kUv0, kUv1);
+            t.IsTrue(gs.getPreferredDisplaySource(preferredSource, preferredDestFbp),
+                     "a later copy may re-enable the preferred scanout source");
+
+            const uint32_t uploadedPixel = 0xFF345678u;
+            gs.uploadImageNative(kTransferBitBlt, 0ull, kOnePixel, 0ull,
+                                 reinterpret_cast<const uint8_t *>(&uploadedPixel),
+                                 static_cast<uint32_t>(sizeof(uploadedPixel)));
+            t.IsFalse(gs.getPreferredDisplaySource(preferredSource, preferredDestFbp),
+                      "a host-to-local image transfer must invalidate the selected scanout source");
+
+            drawUvCopy(kUv0, kUv1);
+            t.IsTrue(gs.getPreferredDisplaySource(preferredSource, preferredDestFbp),
+                     "a valid copy may follow a host-to-local transfer");
+
+            t.IsTrue(gs.clearActiveFramebuffer(0u),
+                     "the active framebuffer clear should be available");
+            t.IsFalse(gs.getPreferredDisplaySource(preferredSource, preferredDestFbp),
+                      "framebuffer clears must invalidate the preferred scanout source");
+
+            drawUvCopy(kUv0, kUv1);
+            t.IsTrue(gs.getPreferredDisplaySource(preferredSource, preferredDestFbp),
+                     "valid copies remain recognized after a clear");
+            t.IsTrue(gs.clearFramebufferContext(1u, 0u),
+                     "the selected context framebuffer clear should be available");
+            t.IsFalse(gs.getPreferredDisplaySource(preferredSource, preferredDestFbp),
+                      "context framebuffer clears must invalidate the preferred source");
         });
 
         tc.Run("latched host presentation frame stays stable until the next latch", [](TestCase &t)

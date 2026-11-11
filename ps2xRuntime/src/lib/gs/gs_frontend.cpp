@@ -1385,6 +1385,11 @@ void GS::writeRegisterUnlocked(uint8_t regAddr, uint64_t value)
     {
         m_trxdir = static_cast<uint32_t>(value & 0x3);
 
+        // Local-to-local transfers write GS VRAM immediately in BeginTransfer.
+        // The previously selected source can no longer represent the result.
+        if (m_trxdir == 2u && m_trxreg.rrw != 0u && m_trxreg.rrh != 0u)
+            m_hasPreferredDisplaySource = false;
+
         if (m_backend)
         {
             GSTransferCommand command{};
@@ -1611,20 +1616,36 @@ void GS::vertexKick(bool drawing)
 void GS::processImageData(const uint8_t *data, uint32_t sizeBytes)
 {
     if (m_backend)
+    {
+        // Host-to-local GIF IMAGE data may overwrite the displayed page.
+        // Without a memory-range proof, invalidate the scanout shortcut.
+        if (m_trxdir == 0u && data && sizeBytes != 0u)
+            m_hasPreferredDisplaySource = false;
         m_backend->UploadImage(data, sizeBytes);
+    }
 }
 
 
 bool GS::clearFramebufferContext(uint32_t contextIndex, uint32_t rgba)
 {
     std::lock_guard<std::recursive_mutex> lock(m_stateMutex);
-    return m_backend && m_backend->ClearFramebuffer(m_ctx[(contextIndex != 0u) ? 1 : 0], rgba);
+    if (!m_backend)
+        return false;
+    const bool cleared = m_backend->ClearFramebuffer(m_ctx[(contextIndex != 0u) ? 1 : 0], rgba);
+    if (cleared)
+        m_hasPreferredDisplaySource = false;
+    return cleared;
 }
 
 bool GS::clearActiveFramebuffer(uint32_t rgba)
 {
     std::lock_guard<std::recursive_mutex> lock(m_stateMutex);
-    return m_backend && m_backend->ClearFramebuffer(activeContext(), rgba);
+    if (!m_backend)
+        return false;
+    const bool cleared = m_backend->ClearFramebuffer(activeContext(), rgba);
+    if (cleared)
+        m_hasPreferredDisplaySource = false;
+    return cleared;
 }
 
 uint32_t GS::consumeLocalToHostBytes(uint8_t *dst, uint32_t maxBytes)
@@ -1672,7 +1693,10 @@ void GS::WriteVram(uint32_t psm, uint32_t base, uint32_t bw, uint32_t x, uint32_
 {
     std::lock_guard<std::recursive_mutex> lock(m_stateMutex);
     if (m_backend)
+    {
+        m_hasPreferredDisplaySource = false;
         m_backend->WriteVram(psm, base, bw, x, y, value);
+    }
 }
 
 GSPrimitiveBatch GS::buildDrawBatch(int vertexCount) const
