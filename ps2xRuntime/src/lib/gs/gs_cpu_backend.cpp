@@ -1929,8 +1929,33 @@ PresentationFrame GSCpuBackend::PresentFromLocalMemory(const GSPresentationReque
         if (copySource(displayFrame1, origin1, width1, height1, false, true, selected1, crt1, preferred1) &&
             copySource(displayFrame2, origin2, width2, height2, false, true, selected2, crt2, preferred2))
         {
-            result.width = std::max(width1, width2);
-            result.height = std::max(height1, height2);
+            // DX/DY specify where each display circuit appears on the CRT.
+            // Their common offset is not the host image origin, but the
+            // relative displacement must survive the merge. With equal
+            // magnification, the difference converts exactly to source pixels.
+            uint32_t x1 = 0u, y1 = 0u, x2 = 0u, y2 = 0u;
+            const uint32_t magh1 = static_cast<uint32_t>((request.display1 >> 23u) & 0xFu);
+            const uint32_t magh2 = static_cast<uint32_t>((request.display2 >> 23u) & 0xFu);
+            const uint32_t magv1 = static_cast<uint32_t>((request.display1 >> 27u) & 0x3u);
+            const uint32_t magv2 = static_cast<uint32_t>((request.display2 >> 27u) & 0x3u);
+            const uint32_t dx1 = static_cast<uint32_t>(request.display1 & 0xFFFu);
+            const uint32_t dx2 = static_cast<uint32_t>(request.display2 & 0xFFFu);
+            const uint32_t dy1 = static_cast<uint32_t>((request.display1 >> 12u) & 0x7FFu);
+            const uint32_t dy2 = static_cast<uint32_t>((request.display2 >> 12u) & 0x7FFu);
+            if (magh1 == magh2)
+            {
+                const uint32_t left = std::min(dx1, dx2);
+                x1 = (dx1 - left) / (magh1 + 1u);
+                x2 = (dx2 - left) / (magh2 + 1u);
+            }
+            if (magv1 == magv2)
+            {
+                const uint32_t top = std::min(dy1, dy2);
+                y1 = (dy1 - top) / (magv1 + 1u);
+                y2 = (dy2 - top) / (magv2 + 1u);
+            }
+            result.width = std::min(kHostFrameWidth, std::max(x1 + width1, x2 + width2));
+            result.height = std::min(kHostFrameHeight, std::max(y1 + height1, y2 + height2));
             result.pixels.assign(kHostFrameWidth * kHostFrameHeight * 4u, 0u);
             const uint8_t bgR = static_cast<uint8_t>(request.bgcolor);
             const uint8_t bgG = static_cast<uint8_t>(request.bgcolor >> 8u);
@@ -1944,14 +1969,18 @@ PresentationFrame GSCpuBackend::PresentFromLocalMemory(const GSPresentationReque
                     dst[2] = bgB;
                     dst[3] = pmode.alp;
                 }
-            if (!pmode.slbg)
-                for (uint32_t y = 0; y < height2; ++y)
-                    std::memcpy(result.pixels.data() + y * kHostFrameWidth * 4u, crt2.data() + y * kHostFrameWidth * 4u, width2 * 4u);
-            for (uint32_t y = 0; y < height1; ++y)
-                for (uint32_t x = 0; x < width1; ++x)
+            if (!pmode.slbg && x2 < result.width)
+            {
+                const uint32_t copyWidth = std::min(width2, result.width - x2);
+                for (uint32_t y = 0u; y < height2 && y + y2 < result.height; ++y)
+                    std::memcpy(result.pixels.data() + ((y + y2) * kHostFrameWidth + x2) * 4u,
+                                crt2.data() + y * kHostFrameWidth * 4u, copyWidth * 4u);
+            }
+            for (uint32_t y = 0u; y < height1 && y + y1 < result.height; ++y)
+                for (uint32_t x = 0u; x < width1 && x + x1 < result.width; ++x)
                 {
                     const uint8_t *src = crt1.data() + (y * kHostFrameWidth + x) * 4u;
-                    uint8_t *dst = result.pixels.data() + (y * kHostFrameWidth + x) * 4u;
+                    uint8_t *dst = result.pixels.data() + ((y + y1) * kHostFrameWidth + x + x1) * 4u;
                     const uint32_t factor = pmode.mmod ? pmode.alp : std::min<uint32_t>(255u, static_cast<uint32_t>(src[3]) * 2u);
                     dst[0] = blendPresentationChannel(src[0], dst[0], factor);
                     dst[1] = blendPresentationChannel(src[1], dst[1], factor);

@@ -1595,6 +1595,62 @@ void register_ps2_gs_tests()
                      "dual-circuit presentation should normalize the final host alpha");
         });
 
+        tc.Run("latched dual-circuit presentation respects relative DISPLAY DX and DY", [](TestCase &t)
+        {
+            constexpr uint32_t kCircuit1Pixel = 200u | (64u << 24);
+            constexpr uint32_t kCircuit2Pixel = (200u << 16) | (255u << 24);
+            constexpr uint32_t kFirstBase = 150u;
+            constexpr uint32_t kSecondBase = 0u;
+
+            for (const bool shiftFirst : {false, true})
+            {
+                std::vector<uint8_t> vram(PS2_GS_VRAM_SIZE, 0u);
+                GSRegisters regs{};
+                regs.pmode = 0x8007ull;
+                regs.dispfb1 = kFirstBase | (10ull << 9) |
+                    (static_cast<uint64_t>(GS_PSM_CT32) << 15);
+                regs.dispfb2 = kSecondBase | (10ull << 9) |
+                    (static_cast<uint64_t>(GS_PSM_CT32) << 15);
+                const uint64_t baseDisplay = (3ull << 23) | (255ull << 32) | (63ull << 44);
+                const uint64_t normalPosition = 636ull | (50ull << 12);
+                const uint64_t offsetPosition = 664ull | (59ull << 12);
+                regs.display1 = baseDisplay | (shiftFirst ? offsetPosition : normalPosition);
+                regs.display2 = baseDisplay | (shiftFirst ? normalPosition : offsetPosition);
+
+                GS gs;
+                gs.init(vram.data(), static_cast<uint32_t>(vram.size()), &regs);
+                writeReferenceFramePSMCT32Pixel(vram, kFirstBase, 10u, 0u, 0u, kCircuit1Pixel);
+                writeReferenceFramePSMCT32Pixel(vram, kSecondBase, 10u, 0u, 0u, kCircuit2Pixel);
+                if (shiftFirst)
+                    writeReferenceFramePSMCT32Pixel(vram, kSecondBase, 10u, 7u, 9u, kCircuit2Pixel);
+                else
+                    writeReferenceFramePSMCT32Pixel(vram, kFirstBase, 10u, 7u, 9u, kCircuit1Pixel);
+                gs.latchHostPresentationFrame();
+
+                std::vector<uint8_t> pixels;
+                uint32_t width = 0u;
+                uint32_t height = 0u;
+                t.IsTrue(gs.copyLatchedHostPresentationFrame(pixels, width, height),
+                         "both display circuits should produce a merged host frame");
+                t.Equals(width, 71u, "relative DX=28 at MAGH=3 should add seven source pixels");
+                t.Equals(height, 73u, "relative DY=9 should add nine source lines");
+                if (pixels.size() == static_cast<size_t>(width) * height * 4u &&
+                    width > 7u && height > 9u)
+                {
+                    const size_t topLeft = 0u;
+                    const size_t overlap = (static_cast<size_t>(9u) * width + 7u) * 4u;
+                    t.Equals(static_cast<uint32_t>(pixels[topLeft]), shiftFirst ? 0u : 100u,
+                             "the unobscured origin must use the correctly positioned circuit");
+                    t.Equals(static_cast<uint32_t>(pixels[topLeft + 2u]), shiftFirst ? 200u : 0u,
+                             "CRT2 must not be composited into the wrong corner");
+                    t.Equals(static_cast<uint32_t>(pixels[overlap]), 100u,
+                             "the overlapping red source should use PMODE alpha");
+                    t.Equals(static_cast<uint32_t>(pixels[overlap + 2u]), 100u,
+                             "the blue source must reach the offset overlap");
+                }
+            }
+        });
+
         tc.Run("latched host presentation normalizes alpha for single-circuit display", [](TestCase &t)
         {
             std::vector<uint8_t> vram(PS2_GS_VRAM_SIZE, 0u);
