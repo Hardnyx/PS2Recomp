@@ -1219,6 +1219,40 @@ void register_ps2_gs_tests()
             drawFullScreenCopy();
             t.IsFalse(gs.getPreferredDisplaySource(preferredSource, preferredDestFbp),
                       "highlight texturing must not bypass texture color combination");
+
+            gs.writeRegister(GS_REG_TEX0_2, kTex0_2);
+            const auto drawUvCopy = [&](uint64_t firstUv, uint64_t lastUv)
+            {
+                gs.writeRegister(GS_REG_PRIM, kPrimCopy);
+                gs.writeRegister(GS_REG_UV, firstUv);
+                gs.writeRegister(GS_REG_XYZ2, kXyz0);
+                gs.writeRegister(GS_REG_UV, lastUv);
+                gs.writeRegister(GS_REG_XYZ2, kXyz1);
+            };
+
+            drawUvCopy(kUv0 + 16ull, kUv1 + 16ull);
+            t.IsFalse(gs.getPreferredDisplaySource(preferredSource, preferredDestFbp),
+                      "a horizontally scrolled fullscreen texture is not an identity copy");
+
+            drawUvCopy(kUv0, kUv1 - (320ull * 16ull));
+            t.IsFalse(gs.getPreferredDisplaySource(preferredSource, preferredDestFbp),
+                      "a cropped fullscreen texture must retain its sampled framebuffer");
+
+            const uint64_t flippedUv0 = (kUv0 & ~0x3FFFull) | (kUv1 & 0x3FFFull);
+            const uint64_t flippedUv1 = (kUv1 & ~0x3FFFull) | (kUv0 & 0x3FFFull);
+            drawUvCopy(flippedUv0, flippedUv1);
+            t.IsFalse(gs.getPreferredDisplaySource(preferredSource, preferredDestFbp),
+                      "a horizontally flipped fullscreen texture must not bypass sampling");
+
+            gs.writeRegister(GS_REG_CLAMP_2, 0x3ull);
+            drawUvCopy(kUv0, kUv1);
+            t.IsFalse(gs.getPreferredDisplaySource(preferredSource, preferredDestFbp),
+                      "region-repeat UV clamping must not be ignored by presentation");
+            gs.writeRegister(GS_REG_CLAMP_2, 0ull);
+
+            drawUvCopy(kUv0, kUv1);
+            t.IsTrue(gs.getPreferredDisplaySource(preferredSource, preferredDestFbp),
+                     "the unshifted full-coverage copy should remain eligible");
         });
 
         tc.Run("latched host presentation frame stays stable until the next latch", [](TestCase &t)

@@ -1742,12 +1742,27 @@ void GS::updatePreferredDisplaySourceForDraw(const GSPrimitiveBatch &batch)
                                      ((ctx.test >> 17u) & 0x3ull) == 1ull);
     const bool fullScissor = ctx.scissor.x0 == 0u && ctx.scissor.y0 == 0u &&
                              ctx.scissor.x1 >= 639u && ctx.scissor.y1 >= 447u;
+    // A screen-sized sprite is not necessarily an unchanged copy. Offsets,
+    // cropped or reversed UVs, and texture-coordinate wrapping can make the
+    // rendered framebuffer differ from the underlying source texture.
+    const int spanX = x1 - x0;
+    const int spanY = y1 - y0;
+    const bool identityTexels = x0 == 0 && y0 == 0 &&
+                                spanX >= 640 && spanY >= 448 &&
+                                spanX <= state.textureWidth &&
+                                spanY <= state.textureHeight &&
+                                (ctx.clamp & 0x3ull) < 2ull &&
+                                ((ctx.clamp >> 2u) & 0x3ull) < 2ull &&
+                                v0.u < 16u && v0.v < 16u &&
+                                static_cast<uint32_t>(v1.u) ==
+                                    static_cast<uint32_t>(v0.u) + static_cast<uint32_t>(spanX) * 16u &&
+                                static_cast<uint32_t>(v1.v) ==
+                                    static_cast<uint32_t>(v0.v) + static_cast<uint32_t>(spanY) * 16u;
     const bool displayCopy = state.prim.tme && state.prim.abe && state.prim.fst && state.prim.ctxt &&
                              ctx.frame.fbp != ctx.tex0.tbp0 && alphaMode == 0x64u &&
                              // Only FIX=0x80 completely discards the destination.
                              alphaFix == 0x80u && unmodifiedSource &&
-                             unconditionalTests && fullScissor &&
-                             x0 <= 0 && y0 <= 0 && xEnd >= 639 && yEnd >= 447;
+                             unconditionalTests && fullScissor && identityTexels;
     if (displayCopy)
     {
         m_preferredDisplaySourceFrame = {ctx.tex0.tbp0, ctx.tex0.tbw, ctx.tex0.psm, 0u};
