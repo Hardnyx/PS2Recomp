@@ -1782,14 +1782,37 @@ void GS::updatePreferredDisplaySourceForDraw(const GSPrimitiveBatch &batch)
                                     static_cast<uint32_t>(v0.u) + static_cast<uint32_t>(spanX) * 16u &&
                                 static_cast<uint32_t>(v1.v) ==
                                     static_cast<uint32_t>(v0.v) + static_cast<uint32_t>(spanY) * 16u;
-    // FRAME.FBP is an 8 KiB page, whereas TEX0.TBP0 is a 256-byte block.
-    // Comparing the register values directly misses aliases on nonzero pages.
-    const bool distinctSourceTarget = (ctx.frame.fbp << 5u) != ctx.tex0.tbp0;
+    // CT32 uses 64x32-pixel pages (32 blocks of 256 bytes). FBP is
+    // page-addressed, TBP0 is block-addressed. Different base addresses
+    // can still overlap after a fullscreen sprite spans multiple pages.
+    const auto usesDisjointCt32Pages = [&]()
+    {
+        constexpr uint64_t kPageBlocks = 32u;
+        constexpr uint64_t kVramBlocks = (4u * 1024u * 1024u) / 256u;
+        const uint64_t pagesX = (static_cast<uint64_t>(spanX) + 63u) / 64u;
+        const uint64_t pagesY = (static_cast<uint64_t>(spanY) + 31u) / 32u;
+        if (spanX <= 0 || spanY <= 0 ||
+            ctx.tex0.tbw < pagesX || ctx.frame.fbw < pagesX)
+            return false;
+
+        // Include the last page in each row, with page-row stepping by
+        // TBW or FBW. This bounds every swizzled CT32 texel write/read.
+        const uint64_t texturePages = (pagesY - 1u) * ctx.tex0.tbw + pagesX;
+        const uint64_t framebufferPages = (pagesY - 1u) * ctx.frame.fbw + pagesX;
+        const uint64_t sourceBegin = ctx.tex0.tbp0;
+        const uint64_t targetBegin = static_cast<uint64_t>(ctx.frame.fbp) * kPageBlocks;
+        const uint64_t sourceEnd = sourceBegin + texturePages * kPageBlocks;
+        const uint64_t targetEnd = targetBegin + framebufferPages * kPageBlocks;
+        if (sourceEnd > kVramBlocks || targetEnd > kVramBlocks)
+            return false; // Avoid aliases through GS VRAM address wrapping.
+        return sourceEnd <= targetBegin || targetEnd <= sourceBegin;
+    };
     const bool displayCopy = state.prim.tme && state.prim.abe && state.prim.fst && state.prim.ctxt &&
-                             distinctSourceTarget && alphaMode == 0x64u &&
+                             alphaMode == 0x64u &&
                              // Only FIX=0x80 completely discards the destination.
                              alphaFix == 0x80u && unmodifiedSource &&
-                             unconditionalTests && fullScissor && identityTexels;
+                             unconditionalTests && fullScissor && identityTexels &&
+                             usesDisjointCt32Pages();
     if (displayCopy)
     {
         m_preferredDisplaySourceFrame = {ctx.tex0.tbp0, ctx.tex0.tbw, ctx.tex0.psm, 0u};

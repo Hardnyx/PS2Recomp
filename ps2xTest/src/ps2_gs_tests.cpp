@@ -1317,6 +1317,35 @@ void register_ps2_gs_tests()
             drawUvCopy(kUv0, kUv1);
             t.IsTrue(gs.getPreferredDisplaySource(preferredSource, preferredDestFbp),
                      "restoring a nonaliasing texture must re-enable valid fullscreen copies");
+
+            // Source starts at block 32 (8 KiB), target at page 150.
+            // The 640x480 texture spans 150 pages, crossing the target
+            // boundary despite having a different base register value.
+            constexpr uint64_t kOverlappingTex0 =
+                (kTex0_2 & ~0x3FFFull) | 32ull;
+            gs.writeRegister(GS_REG_TEX0_2, kOverlappingTex0);
+            drawUvCopy(kUv0, kUv1);
+            t.IsFalse(gs.getPreferredDisplaySource(preferredSource, preferredDestFbp),
+                      "overlapping CT32 page ranges must not bypass framebuffer rendering");
+
+            gs.writeRegister(GS_REG_TEX0_2, kTex0_2);
+            gs.writeRegister(GS_REG_FRAME_2,
+                             (kFrame2 & ~(0x3Full << 16u)) | (9ull << 16u));
+            drawUvCopy(kUv0, kUv1);
+            t.IsFalse(gs.getPreferredDisplaySource(preferredSource, preferredDestFbp),
+                      "a framebuffer stride smaller than the copy width must disable direct scanout");
+
+            gs.writeRegister(GS_REG_FRAME_2, kFrame2);
+            gs.writeRegister(GS_REG_TEX0_2,
+                             (kTex0_2 & ~(0x3Full << 14u)) | (9ull << 14u));
+            drawUvCopy(kUv0, kUv1);
+            t.IsFalse(gs.getPreferredDisplaySource(preferredSource, preferredDestFbp),
+                      "a texture stride smaller than the copy width must disable direct scanout");
+
+            gs.writeRegister(GS_REG_TEX0_2, kTex0_2);
+            drawUvCopy(kUv0, kUv1);
+            t.IsTrue(gs.getPreferredDisplaySource(preferredSource, preferredDestFbp),
+                     "page-aligned adjacent source and target ranges remain eligible");
         });
 
         tc.Run("latched host presentation frame stays stable until the next latch", [](TestCase &t)
