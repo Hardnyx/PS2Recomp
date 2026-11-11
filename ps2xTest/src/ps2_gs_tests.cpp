@@ -1178,6 +1178,47 @@ void register_ps2_gs_tests()
             gs.writeRegister(GS_REG_XYZ2, kXyz1);
             t.IsFalse(gs.getPreferredDisplaySource(preferredSource, preferredDestFbp),
                       "partial-alpha fullscreen draw must not bypass the blended framebuffer");
+
+            const auto drawFullScreenCopy = [&]()
+            {
+                gs.writeRegister(GS_REG_PRIM, kPrimCopy);
+                gs.writeRegister(GS_REG_UV, kUv0);
+                gs.writeRegister(GS_REG_XYZ2, kXyz0);
+                gs.writeRegister(GS_REG_UV, kUv1);
+                gs.writeRegister(GS_REG_XYZ2, kXyz1);
+            };
+
+            gs.writeRegister(GS_REG_ALPHA_2, kAlpha2);
+            gs.writeRegister(GS_REG_RGBAQ, 0x40404040ull);
+            drawFullScreenCopy();
+            t.IsFalse(gs.getPreferredDisplaySource(preferredSource, preferredDestFbp),
+                      "modulated fullscreen texture must not bypass its shaded result");
+
+            gs.writeRegister(GS_REG_RGBAQ, 0x80808080ull);
+            gs.writeRegister(GS_REG_TEST_2, kTest2 | 0x1ull);
+            drawFullScreenCopy();
+            t.IsFalse(gs.getPreferredDisplaySource(preferredSource, preferredDestFbp),
+                      "a fullscreen copy rejected by alpha test must not bypass its destination");
+            gs.writeRegister(GS_REG_TEST_2, kTest2);
+
+            gs.writeRegister(GS_REG_FRAME_2, kFrame2 | (0xFFull << 32u));
+            drawFullScreenCopy();
+            t.IsFalse(gs.getPreferredDisplaySource(preferredSource, preferredDestFbp),
+                      "a framebuffer channel mask must prevent direct texture scanout");
+            gs.writeRegister(GS_REG_FRAME_2, kFrame2);
+
+            gs.writeRegister(GS_REG_PRIM, kPrimCopy | (1ull << 5u));
+            gs.writeRegister(GS_REG_UV, kUv0);
+            gs.writeRegister(GS_REG_XYZ2, kXyz0);
+            gs.writeRegister(GS_REG_UV, kUv1);
+            gs.writeRegister(GS_REG_XYZ2, kXyz1);
+            t.IsFalse(gs.getPreferredDisplaySource(preferredSource, preferredDestFbp),
+                      "fog-enabled fullscreen copies must retain their resulting framebuffer");
+
+            gs.writeRegister(GS_REG_TEX0_2, kTex0_2 | (2ull << 35u));
+            drawFullScreenCopy();
+            t.IsFalse(gs.getPreferredDisplaySource(preferredSource, preferredDestFbp),
+                      "highlight texturing must not bypass texture color combination");
         });
 
         tc.Run("latched host presentation frame stays stable until the next latch", [](TestCase &t)

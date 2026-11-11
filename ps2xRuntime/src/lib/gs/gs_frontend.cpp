@@ -1723,12 +1723,30 @@ void GS::updatePreferredDisplaySourceForDraw(const GSPrimitiveBatch &batch)
     const int yEnd = y0 + std::max(1, y1 - y0) - 1;
     const uint8_t alphaMode = static_cast<uint8_t>(ctx.alpha & 0xFFu);
     const uint8_t alphaFix = static_cast<uint8_t>((ctx.alpha >> 32u) & 0xFFu);
+    // A direct texture read is only equivalent to the drawn framebuffer
+    // when the sprite preserves its source texels. GS shading, fog, tests
+    // and framebuffer masks can change or suppress individual pixels.
+    const auto isNeutralColor = [](const GSVertex &v)
+    {
+        return v.r == 0x80u && v.g == 0x80u && v.b == 0x80u && v.a == 0x80u;
+    };
+    const bool unmodifiedSource = ctx.tex0.tfx == 0u && ctx.tex0.tcc != 0u &&
+                                  isNeutralColor(v0) && isNeutralColor(v1) &&
+                                  !state.prim.fge &&
+                                  ctx.frame.psm == GS_PSM_CT32 &&
+                                  ctx.tex0.psm == GS_PSM_CT32 &&
+                                  ctx.frame.fbmsk == 0u;
+    const bool unconditionalTests = (ctx.test & 0x1ull) == 0ull &&
+                                    (ctx.test & (1ull << 14u)) == 0ull &&
+                                    ((ctx.test & (1ull << 16u)) == 0ull ||
+                                     ((ctx.test >> 17u) & 0x3ull) == 1ull);
+    const bool fullScissor = ctx.scissor.x0 == 0u && ctx.scissor.y0 == 0u &&
+                             ctx.scissor.x1 >= 639u && ctx.scissor.y1 >= 447u;
     const bool displayCopy = state.prim.tme && state.prim.abe && state.prim.fst && state.prim.ctxt &&
                              ctx.frame.fbp != ctx.tex0.tbp0 && alphaMode == 0x64u &&
-                             // FIX=0x60 still mixes 25% of the destination.
-                             // Redirecting presentation to the texture would
-                             // silently discard that framebuffer contribution.
-                             alphaFix == 0x80u &&
+                             // Only FIX=0x80 completely discards the destination.
+                             alphaFix == 0x80u && unmodifiedSource &&
+                             unconditionalTests && fullScissor &&
                              x0 <= 0 && y0 <= 0 && xEnd >= 639 && yEnd >= 447;
     if (displayCopy)
     {
