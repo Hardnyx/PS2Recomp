@@ -1909,7 +1909,7 @@ PresentationFrame GSCpuBackend::PresentFromLocalMemory(const GSPresentationReque
         if (!usedPreferred && displayFrame.fbp == 0u && displayFrame.fbw == 0u &&
             countNonBlackPixels(pixels, width, height) == 0u)
         {
-            for (const GSFrameReg &candidate : request.contextFrames
+            for (const GSFrameReg &candidate : request.contextFrames)
             {
                 if (candidate.fbp == selected.fbp && candidate.fbw == selected.fbw && candidate.psm == selected.psm)
                     continue;
