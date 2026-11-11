@@ -1782,8 +1782,11 @@ void GS::updatePreferredDisplaySourceForDraw(const GSPrimitiveBatch &batch)
                                     static_cast<uint32_t>(v0.u) + static_cast<uint32_t>(spanX) * 16u &&
                                 static_cast<uint32_t>(v1.v) ==
                                     static_cast<uint32_t>(v0.v) + static_cast<uint32_t>(spanY) * 16u;
+    // FRAME.FBP is an 8 KiB page, whereas TEX0.TBP0 is a 256-byte block.
+    // Comparing the register values directly misses aliases on nonzero pages.
+    const bool distinctSourceTarget = (ctx.frame.fbp << 5u) != ctx.tex0.tbp0;
     const bool displayCopy = state.prim.tme && state.prim.abe && state.prim.fst && state.prim.ctxt &&
-                             ctx.frame.fbp != ctx.tex0.tbp0 && alphaMode == 0x64u &&
+                             distinctSourceTarget && alphaMode == 0x64u &&
                              // Only FIX=0x80 completely discards the destination.
                              alphaFix == 0x80u && unmodifiedSource &&
                              unconditionalTests && fullScissor && identityTexels;

@@ -1303,6 +1303,20 @@ void register_ps2_gs_tests()
                      "the selected context framebuffer clear should be available");
             t.IsFalse(gs.getPreferredDisplaySource(preferredSource, preferredDestFbp),
                       "context framebuffer clears must invalidate the preferred source");
+
+            // FRAME.FBP=150 uses 8 KiB pages; TEX0.TBP0 uses 256-byte blocks.
+            // Both registers below refer to the same GS VRAM base address.
+            constexpr uint64_t kAliasedTex0 =
+                (kTex0_2 & ~0x3FFFull) | (150ull << 5u);
+            gs.writeRegister(GS_REG_TEX0_2, kAliasedTex0);
+            drawUvCopy(kUv0, kUv1);
+            t.IsFalse(gs.getPreferredDisplaySource(preferredSource, preferredDestFbp),
+                      "matching VRAM addresses in page/block units must not be treated as distinct");
+
+            gs.writeRegister(GS_REG_TEX0_2, kTex0_2);
+            drawUvCopy(kUv0, kUv1);
+            t.IsTrue(gs.getPreferredDisplaySource(preferredSource, preferredDestFbp),
+                     "restoring a nonaliasing texture must re-enable valid fullscreen copies");
         });
 
         tc.Run("latched host presentation frame stays stable until the next latch", [](TestCase &t)
