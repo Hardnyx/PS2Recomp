@@ -1725,7 +1725,10 @@ void GS::updatePreferredDisplaySourceForDraw(const GSPrimitiveBatch &batch)
     const uint8_t alphaFix = static_cast<uint8_t>((ctx.alpha >> 32u) & 0xFFu);
     const bool displayCopy = state.prim.tme && state.prim.abe && state.prim.fst && state.prim.ctxt &&
                              ctx.frame.fbp != ctx.tex0.tbp0 && alphaMode == 0x64u &&
-                             (alphaFix == 0x60u || alphaFix == 0x80u) &&
+                             // FIX=0x60 still mixes 25% of the destination.
+                             // Redirecting presentation to the texture would
+                             // silently discard that framebuffer contribution.
+                             alphaFix == 0x80u &&
                              x0 <= 0 && y0 <= 0 && xEnd >= 639 && yEnd >= 447;
     if (displayCopy)
     {

@@ -1104,7 +1104,8 @@ void register_ps2_gs_tests()
             constexpr uint64_t kXYOffset2 =
                 (static_cast<uint64_t>(1728u << 4) << 0) |
                 (static_cast<uint64_t>(1808u << 4) << 32);
-            constexpr uint64_t kAlpha2 = 0x6000000064ull;
+            // Only FIX=0x80 is an unweighted destination overwrite.
+            constexpr uint64_t kAlpha2 = 0x8000000064ull;
             constexpr uint64_t kTest2 = 0x30000ull;
             constexpr uint64_t kTex0_2 =
                 (0ull << 0) |
@@ -1166,6 +1167,17 @@ void register_ps2_gs_tests()
 
             t.IsFalse(gs.getPreferredDisplaySource(preferredSource, preferredDestFbp),
                       "non-copy primitives that touch the display target should invalidate the preferred presentation source");
+
+            // The same fullscreen sprite with FIX=0x60 is a 75/25 blend.
+            // The displayed framebuffer must retain its destination component.
+            gs.writeRegister(GS_REG_ALPHA_2, 0x6000000064ull);
+            gs.writeRegister(GS_REG_PRIM, kPrimCopy);
+            gs.writeRegister(GS_REG_UV, kUv0);
+            gs.writeRegister(GS_REG_XYZ2, kXyz0);
+            gs.writeRegister(GS_REG_UV, kUv1);
+            gs.writeRegister(GS_REG_XYZ2, kXyz1);
+            t.IsFalse(gs.getPreferredDisplaySource(preferredSource, preferredDestFbp),
+                      "partial-alpha fullscreen draw must not bypass the blended framebuffer");
         });
 
         tc.Run("latched host presentation frame stays stable until the next latch", [](TestCase &t)
@@ -1203,7 +1215,8 @@ void register_ps2_gs_tests()
             constexpr uint64_t kXYOffset2 =
                 (static_cast<uint64_t>(1728u << 4) << 0) |
                 (static_cast<uint64_t>(1808u << 4) << 32);
-            constexpr uint64_t kAlpha2 = 0x6000000064ull;
+            // Only FIX=0x80 is an unweighted destination overwrite.
+            constexpr uint64_t kAlpha2 = 0x8000000064ull;
             constexpr uint64_t kTest2 = 0x30000ull;
             constexpr uint64_t kTex0_2 =
                 (0ull << 0) |
@@ -1392,7 +1405,8 @@ void register_ps2_gs_tests()
             constexpr uint64_t kXYOffset2 =
                 (static_cast<uint64_t>(1728u << 4) << 0) |
                 (static_cast<uint64_t>(1808u << 4) << 32);
-            constexpr uint64_t kAlpha2 = 0x6000000064ull;
+            // Only FIX=0x80 is an unweighted destination overwrite.
+            constexpr uint64_t kAlpha2 = 0x8000000064ull;
             constexpr uint64_t kTest2 = 0x30000ull;
             constexpr uint64_t kTex0_2 =
                 (static_cast<uint64_t>(kSourceTbp0) << 0) |
