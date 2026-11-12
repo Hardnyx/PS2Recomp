@@ -1161,6 +1161,27 @@ void register_ps2_gs_tests()
             t.Equals(static_cast<uint32_t>(preferredSource.psm), static_cast<uint32_t>(GS_PSM_CT32),
                      "preferred presentation tracking should expose the copy source format");
 
+            // The display page already holds a completed copy. Drawing to
+            // the source now must not make presentation follow its new data.
+            gs.writeRegister(GS_REG_FRAME_1,
+                             (10ull << 16) | (static_cast<uint64_t>(GS_PSM_CT32) << 24));
+            gs.writeRegister(GS_REG_SCISSOR_1, kScissor2);
+            gs.writeRegister(GS_REG_XYOFFSET_1, kXYOffset2);
+            gs.writeRegister(GS_REG_PRIM, static_cast<uint64_t>(GS_PRIM_POINT));
+            gs.writeRegister(GS_REG_RGBAQ, 0xFFFFFFFFull);
+            gs.writeRegister(GS_REG_XYZ2, kXyz0);
+            t.IsFalse(gs.getPreferredDisplaySource(preferredSource, preferredDestFbp),
+                      "a draw to the copied texture must invalidate the previous preferred source");
+
+            gs.writeRegister(GS_REG_PRIM, kPrimCopy);
+            gs.writeRegister(GS_REG_RGBAQ, 0x80808080ull);
+            gs.writeRegister(GS_REG_UV, kUv0);
+            gs.writeRegister(GS_REG_XYZ2, kXyz0);
+            gs.writeRegister(GS_REG_UV, kUv1);
+            gs.writeRegister(GS_REG_XYZ2, kXyz1);
+            t.IsTrue(gs.getPreferredDisplaySource(preferredSource, preferredDestFbp),
+                     "another valid fullscreen copy can re-establish preferred scanout");
+
             gs.writeRegister(GS_REG_PRIM, static_cast<uint64_t>(GS_PRIM_POINT) | (1ull << 9));
             gs.writeRegister(GS_REG_RGBAQ, 0xFFFFFFFFull);
             gs.writeRegister(GS_REG_XYZ2, kXyz0);

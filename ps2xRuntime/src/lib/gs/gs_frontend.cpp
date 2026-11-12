@@ -1730,8 +1730,12 @@ void GS::updatePreferredDisplaySourceForDraw(const GSPrimitiveBatch &batch)
 {
     const GSDrawState &state = batch.state;
     const GSContext &ctx = state.context;
-    if (m_hasPreferredDisplaySource && ctx.frame.fbp == m_preferredDisplayDestFbp)
-        m_hasPreferredDisplaySource = false;
+    // A later primitive may change the texture copied to the display page,
+    // even if it renders to a different framebuffer. In that case reading
+    // the live texture at presentation would no longer reproduce the copy.
+    // Without per-page draw tracking, keep the shortcut only until the
+    // next draw. A new qualifying copy can establish it again.
+    m_hasPreferredDisplaySource = false;
     if (state.prim.type != GS_PRIM_SPRITE || batch.vertexCount < 2u)
         return;
 
