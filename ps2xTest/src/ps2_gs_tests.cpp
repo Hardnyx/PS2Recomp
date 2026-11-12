@@ -1236,6 +1236,17 @@ void register_ps2_gs_tests()
             t.IsFalse(gs.getPreferredDisplaySource(preferredSource, preferredDestFbp),
                       "fog-enabled fullscreen copies must retain their resulting framebuffer");
 
+            // SCANMSK preserves alternate rows of the destination framebuffer.
+            gs.writeRegister(GS_REG_SCANMSK, 2ull);
+            drawFullScreenCopy();
+            t.IsFalse(gs.getPreferredDisplaySource(preferredSource, preferredDestFbp),
+                      "scanline-masked copies must not bypass the composited framebuffer");
+            gs.writeRegister(GS_REG_SCANMSK, 3ull);
+            drawFullScreenCopy();
+            t.IsFalse(gs.getPreferredDisplaySource(preferredSource, preferredDestFbp),
+                      "both scanline mask settings must disable preferred scanout");
+            gs.writeRegister(GS_REG_SCANMSK, 0ull);
+
             gs.writeRegister(GS_REG_TEX0_2, kTex0_2 | (2ull << 35u));
             drawFullScreenCopy();
             t.IsFalse(gs.getPreferredDisplaySource(preferredSource, preferredDestFbp),

@@ -1811,8 +1811,10 @@ void GS::updatePreferredDisplaySourceForDraw(const GSPrimitiveBatch &batch)
             return false; // Avoid aliases through GS VRAM address wrapping.
         return sourceEnd <= targetBegin || targetEnd <= sourceBegin;
     };
+    // SCANMSK suppresses alternate scanlines; the destination retains
+    // pixels that are not present in the live source texture.
     const bool displayCopy = state.prim.tme && state.prim.abe && state.prim.fst && state.prim.ctxt &&
-                             alphaMode == 0x64u &&
+                             state.scanmsk == 0u && alphaMode == 0x64u &&
                              // Only FIX=0x80 completely discards the destination.
                              alphaFix == 0x80u && unmodifiedSource &&
                              unconditionalTests && fullScissor && identityTexels &&
