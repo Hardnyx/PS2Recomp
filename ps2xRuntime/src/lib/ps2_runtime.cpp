@@ -9,6 +9,9 @@
 #include "ps2_runtime_macros.h"
 #include "runtime/gs/gs_frontend.h"
 #include "runtime/ee_scheduler.h"
+#if defined(PS2X_ENABLE_EE_DISPATCH_PROFILE)
+#include "runtime/ee_dispatch_profile.h"
+#endif
 #include "ThreadNaming.h"
 #include "Kernel/Stubs/Audio.h"
 #include "Kernel/Stubs/GS.h"
@@ -1453,7 +1456,15 @@ bool PS2Runtime::dispatchGuestBranch(uint8_t *rdram,
 
     RecompiledFunction targetFn = lookupFunction(targetPc);
     const uint32_t entryPc = ctx->pc;
+#if defined(PS2X_ENABLE_EE_DISPATCH_PROFILE)
+    {
+        ps2x::ee_profile::ScopedCall sample(ps2x::ee_profile::CallKind::Nested,
+                                            sourcePc, targetPc);
+        targetFn(rdram, ctx, this);
+    }
+#else
     targetFn(rdram, ctx, this);
+#endif
 
     if (isStopRequested() || ctx->pc == 0u)
     {

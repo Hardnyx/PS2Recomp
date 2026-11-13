@@ -2,6 +2,7 @@
 #include "ps2_runtime.h"
 #include "ps2_syscalls.h"
 #include "runtime/ee_scheduler.h"
+#include "runtime/ee_dispatch_profile.h"
 #if defined(PS2X_TEST_KZVU_VU1)
 #include "vu/ps2_vu1_kzvu.h"
 #endif
@@ -463,6 +464,31 @@ void register_ps2_runtime_interrupt_tests()
 {
     MiniTest::Case("PS2RuntimeInterrupt", [](TestCase &tc)
     {
+        tc.Run("EE dispatch sample aggregation keeps outer and nested calls separate", [](TestCase &t)
+        {
+            using namespace ps2x::ee_profile;
+            Accumulator samples(2u);
+            const CallKey outer{CallKind::Outer, 0x343604u, 0x343604u};
+            const CallKey nested{CallKind::Nested, 0x343614u, 0x250u};
+            samples.add(outer, 10u, 100u, true);
+            samples.add(outer, 20u, 200u, true);
+            samples.add(nested, 0u, 400u, false);
+
+            t.Equals(samples.rows().size(), size_t(2u), "Outer and nested calls need separate attribution keys");
+            t.Equals(samples.rows().at(outer).samples, uint64_t(2u), "Repeated outer samples must accumulate");
+            t.Equals(samples.rows().at(outer).cpuUnits, uint64_t(30u), "CPU units must sum without wall-time substitution");
+            t.Equals(samples.rows().at(outer).wallNanoseconds, uint64_t(300u), "Outer wall samples must accumulate");
+            t.Equals(samples.rows().at(nested).cpuSamples, uint64_t(0u), "Failed CPU clock reads must not be counted as CPU samples");
+            t.Equals(samples.rows().at(nested).wallNanoseconds, uint64_t(400u), "A missing CPU clock must retain wall evidence");
+
+            samples.add({CallKind::Nested, 0x34390cu, 0xc30u}, 1u, 1u, true);
+            t.Equals(samples.dropped(), uint64_t(1u), "Excess keys must be bounded");
+            t.Equals(samples.rows().size(), size_t(2u), "Overflow must preserve existing profile keys");
+            samples.clear();
+            t.Equals(samples.rows().size(), size_t(0u), "Window reset must clear samples");
+            t.Equals(samples.dropped(), uint64_t(0u), "Window reset must clear overflow counters");
+        });
+
         tc.Run("negative interrupt-safe EE syscall ids dispatch", [](TestCase &t)
         {
             TestEnv env;

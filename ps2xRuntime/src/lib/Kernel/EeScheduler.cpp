@@ -2,6 +2,9 @@
 
 #include "ps2_log.h"
 #include "ps2_runtime_macros.h"
+#if defined(PS2X_ENABLE_EE_DISPATCH_PROFILE)
+#include "runtime/ee_dispatch_profile.h"
+#endif
 
 #include <algorithm>
 #include <cassert>
@@ -296,7 +299,15 @@ void EeScheduler::run()
         {
             m_insideInterrupt = !running->invocations.empty() && running->invocations.back().kind == GuestInvocationKind::Interrupt;
             m_guestExecuting.store(true, std::memory_order_release);
+#if defined(PS2X_ENABLE_EE_DISPATCH_PROFILE)
+            {
+                ps2x::ee_profile::ScopedCall sample(ps2x::ee_profile::CallKind::Outer,
+                                                    context.pc, context.pc);
+                function(m_rdram, &context, &m_runtime);
+            }
+#else
             function(m_rdram, &context, &m_runtime);
+#endif
             m_guestExecuting.store(false, std::memory_order_release);
             m_insideInterrupt = false;
         }
@@ -325,6 +336,9 @@ void EeScheduler::run()
         }
     }
 
+#if defined(PS2X_ENABLE_EE_DISPATCH_PROFILE)
+    ps2x::ee_profile::finish(m_vsyncTick);
+#endif
     m_guestExecuting.store(false, std::memory_order_release);
     m_running.store(false, std::memory_order_release);
     copyMainContextToRuntime();
@@ -1936,6 +1950,9 @@ void EeScheduler::processEvent(const EeEvent &event)
         break;
     case EeEventType::VBlankStart:
         ++m_vsyncTick;
+#if defined(PS2X_ENABLE_EE_DISPATCH_PROFILE)
+        ps2x::ee_profile::onField(m_vsyncTick);
+#endif
         m_runtime.memory().gs().vsyncTick.store(m_vsyncTick, std::memory_order_release);
         if ((m_vsyncTick & 1u) != 0u)
         {
