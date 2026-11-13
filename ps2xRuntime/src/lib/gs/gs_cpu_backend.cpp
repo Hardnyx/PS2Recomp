@@ -855,6 +855,13 @@ void GSCpuBackend::WritePixel(const GSDrawState &state, int x, int y, int z, uin
     if (x < ctx.scissor.x0 || x > ctx.scissor.x1 || y < ctx.scissor.y0 || y > ctx.scissor.y1)
         return;
 
+    // SCANMSK applies to primitive writes, including the depth buffer.
+    // Mode 2 suppresses even rows; mode 3 suppresses odd rows.
+    const uint32_t scanMask = static_cast<uint32_t>(state.scanmsk & 0x3u);
+    if ((scanMask == 2u && (y & 1) == 0) ||
+        (scanMask == 3u && (y & 1) != 0))
+        return;
+
     if (state.prim.fge)
     {
         const uint32_t inverseFog = 255u - fog;

@@ -775,6 +775,59 @@ void register_ps2_gs_tests()
                      "the next XYZ2 should draw BCD from the advanced strip queue");
         });
 
+        tc.Run("SCANMSK suppresses alternating color and depth scanlines", [](TestCase &t)
+        {
+            std::vector<uint8_t> vram(PS2_GS_VRAM_SIZE, 0u);
+            GS gs;
+            gs.init(vram.data(), static_cast<uint32_t>(vram.size()), nullptr);
+
+            constexpr uint32_t kFrameBlock = 0u;
+            constexpr uint32_t kDepthBlock = 32u;
+            constexpr uint32_t kInitialColor = 0x80112233u;
+            constexpr uint32_t kDrawColor = 0x80556677u;
+            constexpr uint32_t kInitialDepth = 0x11111111u;
+            constexpr uint32_t kDrawDepth = 0x22222222u;
+
+            gs.writeRegister(GS_REG_FRAME_1, 1ull << 16);
+            gs.writeRegister(GS_REG_ZBUF_1, 1ull);
+            gs.writeRegister(GS_REG_SCISSOR_1, 3ull << 48);
+            gs.writeRegister(GS_REG_XYOFFSET_1, 0ull);
+            gs.writeRegister(GS_REG_TEST_1, 0x30000ull);
+            gs.writeRegister(GS_REG_PRIM, static_cast<uint64_t>(GS_PRIM_POINT));
+            gs.writeRegister(GS_REG_RGBAQ, kDrawColor);
+
+            for (const uint64_t scanMask : {0ull, 2ull, 3ull})
+            {
+                for (uint32_t y = 0u; y < 4u; ++y)
+                {
+                    gs.WriteVram(GS_PSM_CT32, kFrameBlock, 1u, 0u, y, kInitialColor);
+                    gs.WriteVram(GS_PSM_Z32, kDepthBlock, 1u, 0u, y, kInitialDepth);
+                }
+
+                gs.writeRegister(GS_REG_SCANMSK, scanMask);
+                for (uint32_t y = 0u; y < 4u; ++y)
+                {
+                    const uint64_t xyz =
+                        (static_cast<uint64_t>(kDrawDepth) << 32) |
+                        (static_cast<uint64_t>(y * 16u) << 16);
+                    gs.writeRegister(GS_REG_XYZ2, xyz);
+                }
+
+                for (uint32_t y = 0u; y < 4u; ++y)
+                {
+                    const bool drawn = scanMask == 0ull ||
+                                       (scanMask == 2ull && (y & 1u) != 0u) ||
+                                       (scanMask == 3ull && (y & 1u) == 0u);
+                    const uint32_t expectedColor = drawn ? kDrawColor : kInitialColor;
+                    const uint32_t expectedDepth = drawn ? kDrawDepth : kInitialDepth;
+                    t.Equals(gs.ReadVram(GS_PSM_CT32, kFrameBlock, 1u, 0u, y),
+                             expectedColor, "SCANMSK must preserve masked framebuffer rows");
+                    t.Equals(gs.ReadVram(GS_PSM_Z32, kDepthBlock, 1u, 0u, y),
+                             expectedDepth, "SCANMSK must preserve masked depth rows");
+                }
+            }
+        });
+
         tc.Run("GS fog blends the shaded color toward FOGCOL before framebuffer blending", [](TestCase &t)
         {
             auto renderFoggedPoint = [](bool fogEnabled, uint8_t fog, uint32_t fogColor = 0u) -> uint32_t
