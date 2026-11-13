@@ -426,6 +426,42 @@ void register_ps2_memory_tests()
             t.Equals(mem.read32(kScratchAliasAddr), 0xCAFEBABEu, "reads through 0xF000 scratchpad alias should see scratchpad bytes");
         });
 
+        tc.Run("VU0 microcode generation covers EE write widths and reset", [](TestCase &t)
+        {
+            PS2Memory mem;
+            t.IsTrue(mem.initialize(), "PS2Memory initialize should succeed");
+
+            uint64_t generation = mem.getVU0CodeGeneration();
+            mem.write8(PS2_VU0_CODE_BASE + 0x01u, 0x5Au);
+            t.Equals(mem.getVU0CodeGeneration(), generation + 1u, "8-bit VU0 code write must advance generation");
+
+            generation = mem.getVU0CodeGeneration();
+            mem.write16(PS2_VU0_CODE_BASE + 0x02u, 0x1234u);
+            t.Equals(mem.getVU0CodeGeneration(), generation + 1u, "16-bit VU0 code write must advance generation");
+
+            generation = mem.getVU0CodeGeneration();
+            mem.write32(PS2_VU0_CODE_BASE + 0x04u, 0x12345678u);
+            t.Equals(mem.getVU0CodeGeneration(), generation + 1u, "32-bit VU0 code write must advance generation");
+
+            generation = mem.getVU0CodeGeneration();
+            mem.write64(PS2_VU0_CODE_BASE + 0x08u, 0x0123456789ABCDEFull);
+            t.Equals(mem.getVU0CodeGeneration(), generation + 1u, "64-bit VU0 code write must advance generation");
+
+            generation = mem.getVU0CodeGeneration();
+            mem.write128(PS2_VU0_CODE_BASE + 0x10u, _mm_set1_epi32(0x11223344));
+            t.Equals(mem.getVU0CodeGeneration(), generation + 1u, "128-bit VU0 code write must advance generation");
+
+            generation = mem.getVU0CodeGeneration();
+            mem.write128(PS2_VU0_DATA_BASE + 0x20u, _mm_set1_epi32(0x55667788));
+            mem.write32(PS2_VU1_CODE_BASE + 0x20u, 0xCAFEBABEu);
+            t.Equals(mem.getVU0CodeGeneration(), generation,
+                     "VU0 data and VU1 code writes must not invalidate VU0 microcode");
+
+            t.IsTrue(mem.initialize(), "Reinitializing memory should succeed");
+            t.Equals(mem.getVU0CodeGeneration(), generation + 1u,
+                     "Reinitializing VU0 micro memory must invalidate previously loaded code");
+        });
+
         tc.Run("VU0 code and data windows map through EE addresses", [](TestCase &t)
         {
             PS2Memory mem;
