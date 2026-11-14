@@ -210,6 +210,15 @@ void register_ps2_float_semantics_tests()
             t.Equals(laneBits(flushed, 3), bitsOf(0.5f), "lane 3: 1 * 0.5 should be 0.5");
         });
 
+        tc.Run("SQRT.S reads the ft register", [](TestCase &t)
+        {
+            CodeGenerator gen({}, {});
+
+            const std::string sqrt = gen.translateInstruction(makeCop1S(COP1_S_SQRT, 13, 0, 13));
+            t.IsTrue(sqrt.find("ctx->f[13] = FPU_SQRT_S(ctx->f[13])") != std::string::npos,
+                     "SQRT.S must read ft even when fd aliases ft, but got: " + sqrt);
+        });
+
         tc.Run("DIV.S and RSQRT.S translate to the PS2 semantics helpers", [](TestCase &t)
         {
             CodeGenerator gen({}, {});
