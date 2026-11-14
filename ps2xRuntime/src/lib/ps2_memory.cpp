@@ -192,6 +192,14 @@ namespace
         return distance == 0u ? 0x10000ull : static_cast<uint64_t>(distance);
     }
 
+    // DMA addresses use bit 31 to select scratchpad, independently of EE virtual aliases.
+    inline uint32_t dmaMemoryAddress(uint32_t address)
+    {
+        if ((address & 0x80000000u) != 0u)
+            return PS2_SCRATCHPAD_BASE + (address & (PS2_SCRATCHPAD_SIZE - 16u));
+        return address;
+    }
+
     struct DmaTagView
     {
         uint16_t qwc = 0;
@@ -207,7 +215,7 @@ namespace
         out.qwc = static_cast<uint16_t>(tag & 0xFFFFu);
         out.id = static_cast<uint8_t>((tag >> 28u) & 0x7u);
         out.irq = ((tag >> 31u) & 0x1ull) != 0ull;
-        out.addr = static_cast<uint32_t>((tag >> 32u) & 0x7FFFFFFFu);
+        out.addr = static_cast<uint32_t>(tag >> 32u);
         out.upper = static_cast<uint32_t>((tag >> 16u) & 0xFFFFu);
         return out;
     }
@@ -1317,6 +1325,7 @@ bool PS2Memory::writeIORegister(uint32_t address, uint32_t value)
                 {
                     if (qwCount == 0)
                         return;
+                    srcAddr = dmaMemoryAddress(srcAddr);
                     const bool scratch = isScratchpad(srcAddr);
                     PendingTransfer pt;
                     pt.fromScratchpad = scratch;
@@ -1351,6 +1360,7 @@ bool PS2Memory::writeIORegister(uint32_t address, uint32_t value)
                     {
                         const uint64_t bytes64 = static_cast<uint64_t>(qwCount) * 16ull;
                         uint32_t bytes = (bytes64 > 0xFFFFFFFFull) ? 0xFFFFFFFFu : static_cast<uint32_t>(bytes64);
+                        srcAddr = dmaMemoryAddress(srcAddr);
                         const bool scratch = isScratchpad(srcAddr);
                         uint32_t src = 0;
                         src = translateAddress(srcAddr);
@@ -1384,6 +1394,7 @@ bool PS2Memory::writeIORegister(uint32_t address, uint32_t value)
 
                     auto appendVifTagData = [&](uint32_t localTagAddr)
                     {
+                        localTagAddr = dmaMemoryAddress(localTagAddr);
                         uint32_t tagPhys = 0u;
                         const bool tagScratch = isScratchpad(localTagAddr);
                         tagPhys = translateAddress(localTagAddr);
@@ -1408,11 +1419,12 @@ bool PS2Memory::writeIORegister(uint32_t address, uint32_t value)
                     while (tagsProcessed < kMaxChainTags)
                     {
                         const uint32_t currentTagAddr = tagAddr;
-                        const bool tagInSPR = isScratchpad(tagAddr);
+                        const uint32_t tagMemoryAddr = dmaMemoryAddress(tagAddr);
+                        const bool tagInSPR = isScratchpad(tagMemoryAddr);
                         uint32_t physTag = 0;
                         try
                         {
-                            physTag = translateAddress(tagAddr);
+                            physTag = translateAddress(tagMemoryAddr);
                         }
                         catch (...)
                         {
@@ -1438,7 +1450,7 @@ bool PS2Memory::writeIORegister(uint32_t address, uint32_t value)
                         uint16_t tagQwc = static_cast<uint16_t>(tag & 0xFFFF);
                         uint32_t id = static_cast<uint32_t>((tag >> 28) & 0x7);
                         const bool irq = ((tag >> 31) & 0x1ull) != 0ull;
-                        uint32_t addr = static_cast<uint32_t>((tag >> 32) & 0x7FFFFFFF);
+                        uint32_t addr = static_cast<uint32_t>(tag >> 32);
                         lastTagUpper = static_cast<uint32_t>((tag >> 16) & 0xFFFFu);
                         ++tagsProcessed;
 
@@ -2024,6 +2036,7 @@ bool PS2Memory::tryProcessNativeGifImageUploadChain(GS &gs, uint32_t tadr, uint3
     {
         try
         {
+            guestAddr = dmaMemoryAddress(guestAddr);
             const bool scratch = isScratchpad(guestAddr);
             const uint32_t phys = translateAddress(guestAddr);
             const uint8_t *base = scratch ? m_scratchpad : m_rdram;
@@ -2216,6 +2229,7 @@ bool PS2Memory::tryProcessNativeGifPackedChain(GS &gs, uint32_t tadr, uint32_t c
     {
         try
         {
+            guestAddr = dmaMemoryAddress(guestAddr);
             const bool scratch = isScratchpad(guestAddr);
             const uint32_t phys = translateAddress(guestAddr);
             const uint8_t *base = scratch ? m_scratchpad : m_rdram;

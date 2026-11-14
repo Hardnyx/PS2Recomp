@@ -1144,6 +1144,42 @@ void register_ps2_memory_tests()
             t.IsTrue(contentOk, "scratchpad alias chain payload should match scratchpad bytes");
         });
 
+        tc.Run("GIF DMA chain honors the scratchpad selector in TADR and REF", [](TestCase &t)
+        {
+            PS2Memory mem;
+            t.IsTrue(mem.initialize(), "PS2Memory initialize should succeed");
+
+            constexpr uint32_t kGifCh = 0x1000A000u;
+            constexpr uint32_t kTagOffset = 0x1600u;
+            constexpr uint32_t kPayloadOffset = 0x290u;
+            constexpr uint32_t kSpr = 0x80000000u;
+            const uint64_t refeTag = makeDmaTag(1u, 0u, kPayloadOffset) | (1ull << 63u);
+            const std::array<uint8_t, 16> payload{
+                0x07, 0x20, 0x23, 0x77, 0x62, 0x17, 0x13, 0x43,
+                0x39, 0x34, 0x41, 0x00, 0x11, 0x4A, 0x05, 0x27};
+
+            uint8_t *scratch = mem.getScratchpad();
+            std::memcpy(scratch + kTagOffset, &refeTag, sizeof(refeTag));
+            std::memcpy(scratch + kPayloadOffset, payload.data(), payload.size());
+            mem.write64(kTagOffset, 0u);
+            mem.write64(kPayloadOffset, 0u);
+
+            std::vector<uint8_t> captured;
+            mem.setGifPacketCallback([&](const uint8_t *data, uint32_t sizeBytes)
+            {
+                captured.insert(captured.end(), data, data + sizeBytes);
+            });
+
+            t.IsTrue(mem.writeIORegister(kGifCh + 0x30u, kSpr | kTagOffset),
+                     "write scratchpad TADR should succeed");
+            t.IsTrue(mem.writeIORegister(kGifCh + 0x00u, 0x105u),
+                     "start the GIF source chain");
+            mem.processPendingTransfers();
+
+            t.IsTrue(captured == std::vector<uint8_t>(payload.begin(), payload.end()),
+                     "the chain tag and referenced bytes should come from scratchpad");
+        });
+
         tc.Run("native GIF image upload recognizes canonical load-image chain", [](TestCase &t)
         {
             PS2Memory mem;

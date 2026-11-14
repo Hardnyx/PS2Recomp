@@ -151,7 +151,7 @@ namespace ps2_stubs
         // Applies the matrix to the vertex, perspective-divides xyz by w
         // (w==0 maps to a zero divide rather than Inf/NaN), then converts
         // x/y to 12.4 fixed point (x16) unconditionally. z/w take the same
-        // x16 conversion when fullFtoi4 is set; otherwise they are plain
+        // x16 conversion in SDK mode zero; otherwise they are plain
         // integer-truncated (FTOI0) after the divide instead.
         void rotTransPersOne(const float (&m)[16], const float (&v)[4], bool fullFtoi4, int32_t (&out)[4])
         {
@@ -890,7 +890,7 @@ namespace ps2_stubs
         const uint32_t dstAddr = getRegU32(ctx, 4);
         const uint32_t matAddr = getRegU32(ctx, 5);
         const uint32_t vAddr = getRegU32(ctx, 6);
-        const bool fullFtoi4 = (getRegU32(ctx, 7) != 0);
+        const bool fullFtoi4 = (getRegU32(ctx, 7) == 0);
         float m[16]{}, v[4]{};
         if (readVuMatrix4f(rdram, matAddr, m) && readVuVec4f(rdram, vAddr, v))
         {
@@ -907,7 +907,7 @@ namespace ps2_stubs
         const uint32_t matAddr = getRegU32(ctx, 5);
         uint32_t vAddr = getRegU32(ctx, 6);
         const int32_t count = static_cast<int32_t>(getRegU32(ctx, 7));
-        const bool fullFtoi4 = (getRegU32(ctx, 8) != 0);
+        const bool fullFtoi4 = (getRegU32(ctx, 8) == 0);
         float m[16]{};
         if (readVuMatrix4f(rdram, matAddr, m))
         {

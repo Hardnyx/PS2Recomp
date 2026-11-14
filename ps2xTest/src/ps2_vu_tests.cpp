@@ -802,7 +802,7 @@ void register_ps2_vu_tests()
             SET_GPR_U32(&env.ctx, 4, kDst);
             SET_GPR_U32(&env.ctx, 5, kA);
             SET_GPR_U32(&env.ctx, 6, kB);
-            SET_GPR_U32(&env.ctx, 7, 1u); // fullFtoi4 = true
+            SET_GPR_U32(&env.ctx, 7, 0u); // Mode zero applies FTOI4 to all four lanes.
             ps2_stubs::sceVu0RotTransPers(env.rdram.data(), &env.ctx, &env.runtime);
             int32_t out[4]{};
             readVec4i(env, kDst, out);
@@ -810,7 +810,7 @@ void register_ps2_vu_tests()
                      "RotTransPers should perspective-divide x/y/z then FTOI4, with w taking the un-divided FTOI4 value");
         });
 
-        tc.Run("RotTransPers_ftoi0_z_when_flag0", [](TestCase &t)
+        tc.Run("RotTransPers_ftoi0_zw_when_mode_nonzero", [](TestCase &t)
         {
             VuEnv env;
             float ident[16]{};
@@ -820,12 +820,12 @@ void register_ps2_vu_tests()
             SET_GPR_U32(&env.ctx, 4, kDst);
             SET_GPR_U32(&env.ctx, 5, kA);
             SET_GPR_U32(&env.ctx, 6, kB);
-            SET_GPR_U32(&env.ctx, 7, 0u); // fullFtoi4 = false
+            SET_GPR_U32(&env.ctx, 7, 1u); // A nonzero mode overwrites Z/W with FTOI0.
             ps2_stubs::sceVu0RotTransPers(env.rdram.data(), &env.ctx, &env.runtime);
             int32_t out[4]{};
             readVec4i(env, kDst, out);
             t.IsTrue(out[2] == 8 && out[3] == 2,
-                     "RotTransPers should FTOI0-truncate z/w instead of FTOI4 when fullFtoi4 is clear");
+                     "RotTransPers should FTOI0-truncate z/w instead of FTOI4 when the mode is nonzero");
         });
 
         tc.Run("RotTransPers_persp_wzero_zero", [](TestCase &t)
@@ -858,7 +858,7 @@ void register_ps2_vu_tests()
             //   t1 = m1*1 + m5*2 + m9*3  + m13*1 = 3 + 2  + 0  + 20 = 25
             //   t2 = m2*1 + m6*2 + m10*3 + m14*1 = 0 + 8  + 3  + 30 = 41
             //   t3 = m3*1 + m7*2 + m11*3 + m15*1 = 1
-            // fullFtoi4=true => every lane x16: (432, 400, 656, 16).
+            // Mode zero scales every lane by 16: (432, 400, 656, 16).
             VuEnv env;
             float m[16] = {
                 2.0f, 3.0f, 0.0f, 0.0f,
@@ -871,7 +871,7 @@ void register_ps2_vu_tests()
             SET_GPR_U32(&env.ctx, 4, kDst);
             SET_GPR_U32(&env.ctx, 5, kA);
             SET_GPR_U32(&env.ctx, 6, kB);
-            SET_GPR_U32(&env.ctx, 7, 1u); // fullFtoi4 = true
+            SET_GPR_U32(&env.ctx, 7, 0u); // Mode zero applies FTOI4 to all four lanes.
             ps2_stubs::sceVu0RotTransPers(env.rdram.data(), &env.ctx, &env.runtime);
             int32_t out[4]{};
             readVec4i(env, kDst, out);
@@ -891,13 +891,21 @@ void register_ps2_vu_tests()
             SET_GPR_U32(&env.ctx, 5, kA);
             SET_GPR_U32(&env.ctx, 6, kArr);
             SET_GPR_U32(&env.ctx, 7, 2u);
-            SET_GPR_U32(&env.ctx, 8, 1u);
+            SET_GPR_U32(&env.ctx, 8, 0u);
             ps2_stubs::sceVu0RotTransPersN(env.rdram.data(), &env.ctx, &env.runtime);
             int32_t out0[4]{}, out1[4]{};
             readVec4i(env, kDst, out0);
             readVec4i(env, kDst + 16u, out1);
             t.IsTrue(out0[3] == 64, "RotTransPersN first vertex should use w=4");
             t.IsTrue(out1[3] == 640, "RotTransPersN second vertex should advance the input/output stride by 16 bytes");
+            SET_GPR_U32(&env.ctx, 8, 2u);
+            ps2_stubs::sceVu0RotTransPersN(env.rdram.data(), &env.ctx, &env.runtime);
+            readVec4i(env, kDst, out0);
+            readVec4i(env, kDst + 16u, out1);
+            t.IsTrue(out0[0] == 4 && out0[1] == 8 && out0[2] == 0 && out0[3] == 4,
+                     "RotTransPersN must retain FTOI4 for X/Y in nonzero mode");
+            t.IsTrue(out1[2] == 0 && out1[3] == 40,
+                     "RotTransPersN must use FTOI0 for Z/W at each vertex in nonzero mode");
         });
 
         tc.Run("ecossin_cos_sin", [](TestCase &t)
