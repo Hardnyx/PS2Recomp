@@ -210,6 +210,30 @@ void register_ps2_float_semantics_tests()
             t.Equals(laneBits(flushed, 3), bitsOf(0.5f), "lane 3: 1 * 0.5 should be 0.5");
         });
 
+        tc.Run("CVT.W.S truncates and saturates with PS2 hardware result bits", [](TestCase &t)
+        {
+            // Result pairs from unknownbrackets/ps2autotests, tests/cpu/ee_fpu/convert.expected.
+            constexpr uint32_t cases[][2] = {
+                {0x00000000u, 0x00000000u}, {0x80000000u, 0x00000000u},
+                {0x00000005u, 0x00000000u}, {0x3fbeb852u, 0x00000001u},
+                {0x3fc00000u, 0x00000001u}, {0x3fc147aeu, 0x00000001u},
+                {0xbfbeb852u, 0xffffffffu}, {0xbfc00000u, 0xffffffffu},
+                {0xbfc147aeu, 0xffffffffu}, {0x4effffffu, 0x7fffff80u},
+                {0xceffffffu, 0x80000080u}, {0x4f000000u, 0x7fffffffu},
+                {0xcf000000u, 0x80000000u}, {0x7f800000u, 0x7fffffffu},
+                {0xff800000u, 0x80000000u}, {0x7fffffffu, 0x7fffffffu},
+                {0xffffffffu, 0x80000000u},
+            };
+            for (const auto &entry : cases)
+                t.Equals(static_cast<uint32_t>(FPU_CVT_W_S(floatOf(entry[0]))), entry[1],
+                         "CVT.W.S hardware input bits: " + std::to_string(entry[0]));
+
+            CodeGenerator gen({}, {});
+            const auto translated = gen.translateInstruction(makeCop1S(COP1_S_CVT_W, 2, 3, 0));
+            t.IsTrue(translated.find("FPU_CVT_W_S(ctx->f[3])") != std::string::npos, translated);
+        });
+
+
         tc.Run("VU0 VADD preserves PS2 alignment, signed zero and exponent range", [](TestCase &t)
         {
             const __m128 a = _mm_set_ps(floatOf(0x00800001u), floatOf(0x80000001u),
