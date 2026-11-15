@@ -4,6 +4,7 @@
 #include <cmath>
 #include <cstring>
 #include <bit>
+#include <utility>
 #if defined(_MSC_VER)
 #include <intrin.h>
 #elif defined(USE_SSE2NEON)
@@ -369,8 +370,65 @@ inline __m128 ps2_vmul(__m128 a, __m128 b)
     return ps2_vfinish(a, b, _mm_mul_ps(a, b), Ps2VecOp::Mul);
 }
 
+// PS2 floating-point addition retains one guard bit when aligning operands.
+inline std::uint32_t ps2_vu_add_lane(std::uint32_t a, std::uint32_t b)
+{
+    constexpr std::uint32_t signBit = 0x80000000u;
+    constexpr std::uint32_t implicitBit = 0x00800000u;
+    constexpr std::uint32_t fractionMask = implicitBit - 1;
+    auto exponentA = static_cast<int>((a >> 23) & 0xffu);
+    auto exponentB = static_cast<int>((b >> 23) & 0xffu);
+
+    if (exponentA < exponentB)
+    {
+        std::swap(a, b);
+        std::swap(exponentA, exponentB);
+    }
+
+    if (exponentA == 0)
+        return a & b & signBit;
+
+    const int exponentDistance = exponentA - exponentB;
+    if (exponentB == 0 || exponentDistance >= 25)
+        return a;
+
+    const int significandA = static_cast<int>(((a & fractionMask) | implicitBit) << 1);
+    const int significandB = static_cast<int>((((b & fractionMask) | implicitBit) << 1) >> exponentDistance);
+    const int sum = ((a & signBit) ? -significandA : significandA)
+                  + ((b & signBit) ? -significandB : significandB);
+    if (sum == 0)
+        return 0;
+
+    const std::uint32_t sign = sum < 0 ? signBit : 0u;
+    const auto magnitude = static_cast<std::uint32_t>(sum < 0 ? -sum : sum);
+    const int top = static_cast<int>(std::bit_width(magnitude)) - 1;
+    const int exponent = exponentA + top - 24;
+    if (exponent < 1)
+        return sign;
+    if (exponent > 255)
+        return sign | 0x7fffffffu;
+
+    const std::uint32_t significand = top >= 23 ? magnitude >> (top - 23) : magnitude << (23 - top);
+    return sign | (static_cast<std::uint32_t>(exponent) << 23) | (significand & fractionMask);
+}
+
+inline __m128 ps2_vadd_exact(__m128 a, __m128 b)
+{
+    std::uint32_t left[4], right[4], result[4];
+    std::memcpy(left, &a, sizeof(left));
+    std::memcpy(right, &b, sizeof(right));
+    for (int lane = 0; lane < 4; ++lane)
+        result[lane] = ps2_vu_add_lane(left[lane], right[lane]);
+
+    __m128 sum;
+    std::memcpy(&sum, result, sizeof(sum));
+    return sum;
+}
+
 // PS2 VU (Vector Unit) operations
+// PS2_VADD remains the addition step of the existing FMAC translation.
 #define PS2_VADD(a, b) ps2_vadd((__m128)(a), (__m128)(b))
+#define PS2_VADD_EXACT(a, b) ps2_vadd_exact((__m128)(a), (__m128)(b))
 #define PS2_VSUB(a, b) ps2_vsub((__m128)(a), (__m128)(b))
 #define PS2_VMUL(a, b) ps2_vmul((__m128)(a), (__m128)(b))
 #define PS2_VDIV(a, b) _mm_div_ps((__m128)(a), (__m128)(b))
