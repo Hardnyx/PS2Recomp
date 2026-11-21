@@ -9,6 +9,25 @@ The historical `tekken-runtime` ref remains frozen at `70295a878764252c47656eb48
 an ancestor of `main`; it is not used for new work. The upstream license and
 notices remain in [LICENSE](LICENSE).
 
+## EE COP1 startup control (20 November 2026)
+
+The R5900 context now initializes FCR31 to `0x01000001`.
+The previous zero-initialized state differed from PCSX2 2.8.2
+and the matched Ogre Practice capture before the first lighting
+updates. The general initialization belongs to this runtime;
+later CTC1 writes and floating-point comparison-flag updates
+remain active. The PS2 float semantics suite checks context
+initialization, independence and the generated CFC1/CTC1 paths.
+
+An isolated Windows control of the corresponding reversible port
+patch passed the constructor probe, 62 ADD/SUB cases and 46
+MUL cases without changing 256 captured arithmetic operations,
+nine lighting histories or 15 captured images from the preceding
+candidate. The result corrects startup state on that route; it
+does not prove complete COP1 flag behavior or improved graphics.
+This source change requires CI and normal port integration
+validation before the port changes its declared source pin.
+
 ## Scope and integration
 
 This fork maintains reusable recompiler and runtime corrections needed by

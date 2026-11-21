@@ -3,6 +3,7 @@
 #include "ps2recomp/instructions.h"
 #include "ps2recomp/types.h"
 #include "ps2_runtime_macros.h"
+#include "ps2_runtime.h"
 
 #include <cmath>
 #include <cstdint>
@@ -101,6 +102,38 @@ void register_ps2_float_semantics_tests()
 {
     MiniTest::Case("PS2FloatSemantics", [](TestCase &tc)
     {
+        tc.Run("EE COP1 control starts at the observed boot value", [](TestCase &t)
+        {
+            R5900Context first{};
+            R5900Context second{};
+            t.Equals(first.fcr31, 0x01000001u, "FCR31 must be initialized before guest dispatch");
+            t.Equals(second.fcr31, 0x01000001u, "each EE context must have its own COP1 control state");
+
+            first.fcr31 ^= 0x00800000u;
+            t.Equals(first.fcr31, 0x01800001u, "the comparison flag may change after startup");
+            t.Equals(second.fcr31, 0x01000001u, "one context must not change another context");
+        });
+
+        tc.Run("COP1 CFC1 and CTC1 preserve access to the FCR31 register", [](TestCase &t)
+        {
+            CodeGenerator gen({}, {});
+            Instruction cfc1{};
+            cfc1.opcode = OPCODE_COP1;
+            cfc1.rs = COP1_CF;
+            cfc1.rt = 8;
+            cfc1.rd = 31;
+            const std::string read = gen.translateInstruction(cfc1);
+            t.IsTrue(read.find("SET_GPR_U32(ctx, 8, ctx->fcr31)") != std::string::npos,
+                     "CFC1 must read the current FCR31 value, not a fixed startup constant: " + read);
+
+            Instruction ctc1 = cfc1;
+            ctc1.rs = COP1_CT;
+            ctc1.rt = 9;
+            const std::string write = gen.translateInstruction(ctc1);
+            t.IsTrue(write.find("ctx->fcr31 = GPR_U32(ctx, 9) & 0x0183FFFF") != std::string::npos,
+                     "CTC1 must update the live FCR31 value: " + write);
+        });
+
         tc.Run("FPU results match the PS2 hardware results from ps2autotests", [](TestCase &t)
         {
             for (const HardwareVector &v : kHardwareVectors)

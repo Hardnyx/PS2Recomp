@@ -148,6 +148,10 @@ struct alignas(16) R5900Context
     {
         std::memset(this, 0, sizeof(*this));
 
+        // Initialize COP1 status/control before the first guest instruction.
+        // Guest CTC1 writes may subsequently replace this value.
+        fcr31 = 0x01000001u;
+
         // Initialize VU0 registers
         vu0_q = 1.0f; // Q register usually initialized to 1.0
 
