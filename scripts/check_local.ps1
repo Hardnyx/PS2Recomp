@@ -50,7 +50,7 @@ if ($Mode -eq 'Changed') {
         }
         if ($path -match '^ps2x(Runtime|Test|IOP)/') {
             $runDefault = $true
-            if ($path -match '(?i)(kzvu|(^|/)vu[01]?(_|/)|ps2_vu|vu_cycle|vu_hazard)') {
+            if ($path -match '(?i)(kzvu|(^|/)vu[01]?(_|/)|ps2_vu|vu_cycle|vu_hazard|(^|/)vu\.cpp$|(^|/)ps2_runtime_macros\.h$)') {
                 $runReference = $true
             }
             continue
