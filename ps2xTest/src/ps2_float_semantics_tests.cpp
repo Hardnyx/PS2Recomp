@@ -243,6 +243,18 @@ void register_ps2_float_semantics_tests()
             t.Equals(laneBits(flushed, 3), bitsOf(0.5f), "lane 3: 1 * 0.5 should be 0.5");
         });
 
+        tc.Run("COP1 C.EQ.S changes only the FCR31 condition bit", [](TestCase &t)
+        {
+            CodeGenerator gen({}, {});
+            const std::string compare = gen.translateInstruction(makeCop1S(COP1_S_C_EQ, 0, 4, 5));
+            t.IsTrue(compare.find("FPU_C_EQ_S(ctx->f[4], ctx->f[5])") != std::string::npos,
+                     "C.EQ.S must compare the two source registers: " + compare);
+            t.IsTrue(compare.find("(ctx->fcr31 | 0x800000)") != std::string::npos,
+                     "C.EQ.S must set the live condition flag without replacing FCR31: " + compare);
+            t.IsTrue(compare.find("(ctx->fcr31 & ~0x800000)") != std::string::npos,
+                     "C.EQ.S must clear only the live condition flag: " + compare);
+        });
+
         tc.Run("SQRT.S reads the ft register", [](TestCase &t)
         {
             CodeGenerator gen({}, {});
