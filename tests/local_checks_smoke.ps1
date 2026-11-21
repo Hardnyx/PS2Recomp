@@ -39,6 +39,7 @@ $cases = @(
     @{ Path = 'scripts/resolve_local_changes.ps1'; Required = @('TEST local_checks_smoke.ps1'); Forbidden = @('BUILD') },
     @{ Path = 'ps2xRuntime/src/lib/vu/ps2_vu1_kzvu.cpp'; Required = @('BUILD local PS2Recomp default tests', 'BUILD local PS2Recomp KZVU reference tests'); Forbidden = @() },
     @{ Path = 'ps2xRuntime/src/lib/Kernel/Stubs/VU.cpp'; Required = @('BUILD local PS2Recomp default tests', 'BUILD local PS2Recomp KZVU reference tests'); Forbidden = @() },
+    @{ Path = 'ps2xRuntime/src/lib/Kernel/Stubs/VU.h'; Required = @('BUILD local PS2Recomp default tests', 'BUILD local PS2Recomp KZVU reference tests'); Forbidden = @() },
     @{ Path = 'ps2xRuntime/include/ps2_runtime_macros.h'; Required = @('BUILD local PS2Recomp default tests', 'BUILD local PS2Recomp KZVU reference tests'); Forbidden = @() },
     @{ Path = 'ps2xRuntime/src/lib/Kernel/EeScheduler.cpp'; Required = @('BUILD local PS2Recomp default tests'); Forbidden = @('KZVU reference') },
     @{ Path = 'CMakeLists.txt'; Required = @('BUILD local PS2Recomp complete default', 'KZVU reference'); Forbidden = @() }
