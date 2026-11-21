@@ -1,34 +1,58 @@
 # Local PS2Recomp validation
 
-Hosted GitHub workflows for both the normal build and the optional VU
-reference backend are manual-only. Do not start them automatically on pushes.
+GitHub Actions workflows remain manual-only. No push, hook or local test
+starts a cloud workflow.
 
-In an existing Windows checkout, execute:
+## Windows development environment
 
+Run the checker from an MSVC x64 developer command prompt with CMake and
+PowerShell available:
+
+    powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\check_local.ps1 -ListOnly
     powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\check_local.ps1
 
-Changed mode compares the current checkout against origin/main and includes
-uncommitted files. Documentation-only changes do not compile. Changes to
-runtime sources, tests, CMake or unknown code run the existing default
-ps2x_tests target. All local builds retain their CMake cache in out/local-default.
+The first normal check without a previously verified baseline selects the
+complete build, both native test variants and the selector regression. It
+does not compare only HEAD~1 and it cannot declare an API-created commit
+validated merely because origin/main equals HEAD. After a successful,
+clean, on-main check, the verified SHA is recorded under the local Git
+directory in local-checks/verified-main. The marker is not published.
+Subsequent checks cover every commit since that SHA, plus staged, unstaged
+and untracked files. Deletions and both sides of a rename are visible.
 
-To force the default native tests:
+Explicit modes: -Mode Default checks ordinary native components;
+-Mode Reference checks optional KZVU; -Mode Build builds the complete
+ordinary configuration and runs tests. KZVU-related source and CMake
+changes select both ordinary and reference tests automatically.
+Reference validation needs -KzvuSourceRoot and -Pcsx2Root pointing to
+clean existing source trees at the pinned KillzoneRecomp and PCSX2 SHAs.
+A missing reference is a failure, not a successful skipped test.
 
-    powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\check_local.ps1 -Mode Default
+CMake uses NMake Makefiles and explicit build/component options.
+Cached generator conflicts fail rather than deleting another build.
+Dependency fetching is disabled; prepare the source dependencies locally
+before running. Outputs are incremental in out/local-default and
+out/local-kzvu. The normal build does not rewrite local repositories.
 
-For a broader build, select -Mode Build. For reference VU1 tests, select
--Mode Reference with -KzvuSourceRoot and -Pcsx2Root, pointing to existing
-source trees at the pinned revisions recorded in the workflow. The source
-trees are never downloaded, updated or cleaned by this script. Reference
-mode uses the separate out/local-kzvu build tree.
+## Pre-push
 
-To preview whether a change needs compilation, use -ListOnly. Optional
-local pre-push checks can be installed with scripts/install_local_hooks.ps1.
-Only the local checkout is affected, and an existing custom hooksPath is
-preserved unless -Force is specified. API-created commits do not execute
-hooks on a workstation.
+The optional repository-local pre-push hook reads the actual local and
+remote refs and SHA pairs provided by Git. It permits only main pushes,
+rejects deletions/non-fast-forward updates, and validates every committed
+change being pushed. If the remote SHA is unavailable locally, the full
+suite is selected. No origin/main assumption is made.
 
-These unit tests are not an end-to-end game or hardware-equivalence control.
-The port dependency pin remains unchanged until clean integration and visual
-comparisons have passed. Run GitHub Actions manually only for cases that
-cannot reasonably be tested locally and only after verifying billing.
+Install only after the Windows regression checks pass:
+
+    powershell -NoProfile -ExecutionPolicy Bypass -File .\scripts\install_local_hooks.ps1
+
+An existing custom hooksPath is preserved unless -Force is supplied.
+Commits created through a GitHub connector do not invoke local hooks;
+run the normal checker after updating the workstation checkout.
+A successful pre-push check does not write the last-verified marker.
+
+The synthetic routing tests can be run separately:
+
+    powershell -NoProfile -ExecutionPolicy Bypass -File .\tests\local_checks_smoke.ps1
+
+These checks do not prove Tekken gameplay, timing or pixel fidelity.

@@ -1,4 +1,4 @@
 #!/bin/sh
-# Run relevant Windows component checks before a local push, not in the cloud.
+# Git supplies the exact local and remote refs/SHAs on standard input.
 root=$(git rev-parse --show-toplevel) || exit 1
-exec powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$root/scripts/check_local.ps1" -Mode Changed -BaseRef origin/main
+exec powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$root/scripts/check_local.ps1" -Mode Changed -PushInput
