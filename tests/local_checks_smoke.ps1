@@ -83,6 +83,11 @@ try {
     if ($LASTEXITCODE -ne 0 -or ($fromPush -join ' ') -notmatch 'KZVU reference') {
         throw 'Git pre-push SHA range was not honored.'
     }
+    $emptyPushRejected = $false
+    try {
+        & (Join-Path $root 'scripts\resolve_local_changes.ps1') -ProjectRoot $temporary -PushLines @('') | Out-Null
+    } catch { $emptyPushRejected = $true }
+    if (-not $emptyPushRejected) { throw 'An empty pre-push input was accepted.' }
     $stalePush = "refs/heads/main $initial refs/heads/main $initial"
     $wrongRevisionRejected = $false
     try {

@@ -41,6 +41,8 @@ if ($PushInput -or $PushLines.Count -gt 0) {
     $lines = if ($PushLines.Count -gt 0) { @($PushLines) } else {
         @([Console]::In.ReadToEnd() -split '\r?\n' | Where-Object { $_.Trim() })
     }
+    $lines = @($lines | Where-Object { $_.Trim() })
+    if ($lines.Count -eq 0) { throw 'Git pre-push supplied no ref updates; refusing an empty validation.' }
     $checkedOut = Resolve-Commit 'HEAD'
     if (-not $checkedOut) { throw 'Cannot verify the checked-out commit before a push.' }
     $working = @(& git -C $root status --porcelain --untracked-files=normal)
