@@ -9,6 +9,15 @@ $hookPath = Join-Path $root '.githooks\pre-push'
 if (-not (Test-Path -LiteralPath $hookPath -PathType Leaf)) {
     throw 'The repository-local pre-push hook is missing.'
 }
+$hookEntry = @(& git -C $root ls-files --stage -- .githooks/pre-push)
+if ($LASTEXITCODE -ne 0 -or $hookEntry.Count -ne 1 -or $hookEntry[0] -notmatch '^100755 ') {
+    throw 'The tracked pre-push hook must retain executable mode 100755.'
+}
+$installer = Get-Content -LiteralPath (Join-Path $root 'scripts\install_local_hooks.ps1') -Raw
+if (-not $installer.Contains('config --local --get-all core.hooksPath') -or
+    -not $installer.Contains('config --local --replace-all core.hooksPath')) {
+    throw 'Hook installer must verify and replace only the local hooksPath.'
+}
 $workflowDirectory = Join-Path $root '.github\workflows'
 $workflows = @(Get-ChildItem -LiteralPath $workflowDirectory -File |
                Where-Object { $_.Extension -in @('.yml', '.yaml') })
