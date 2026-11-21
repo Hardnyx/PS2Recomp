@@ -4,6 +4,34 @@ param()
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 $root = Split-Path -Parent $PSScriptRoot
+# Repository workflows are deliberately manual-only; test their event declarations.
+$hookPath = Join-Path $root '.githooks\pre-push'
+if (-not (Test-Path -LiteralPath $hookPath -PathType Leaf)) {
+    throw 'The repository-local pre-push hook is missing.'
+}
+$workflowDirectory = Join-Path $root '.github\workflows'
+$workflows = @(Get-ChildItem -LiteralPath $workflowDirectory -File |
+               Where-Object { $_.Extension -in @('.yml', '.yaml') })
+if ($workflows.Count -lt 2) { throw 'Expected GitHub Actions workflows are missing.' }
+foreach ($workflow in $workflows) {
+    $lines = [IO.File]::ReadAllLines($workflow.FullName)
+    $onLines = @(for ($line = 0; $line -lt $lines.Length; ++$line) {
+        if ($lines[$line] -match '^on:[ \t]*$') { $line }
+    })
+    if ($onLines.Count -ne 1) {
+        throw "Ambiguous or missing workflow event declaration: $($workflow.Name)"
+    }
+    $events = @()
+    for ($line = $onLines[0] + 1; $line -lt $lines.Length; ++$line) {
+        if ($lines[$line] -match '^[^ #\t][^:]*:') { break }
+        if ($lines[$line] -match '^  ([A-Za-z_][A-Za-z0-9_-]*):') {
+            $events += $Matches[1]
+        }
+    }
+    if ($events.Count -ne 1 -or $events[0] -ne 'workflow_dispatch') {
+        throw "Hosted workflow must be manual-only: $($workflow.Name)"
+    }
+}
 $runner = Join-Path $root 'scripts\check_local.ps1'
 $shell = [Diagnostics.Process]::GetCurrentProcess().MainModule.FileName
 $cases = @(
