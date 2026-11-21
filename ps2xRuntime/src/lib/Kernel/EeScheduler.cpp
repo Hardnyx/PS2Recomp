@@ -406,8 +406,17 @@ void EeScheduler::accountCycles(uint32_t cycles) noexcept
 {
     const uint64_t elapsed = std::max<uint64_t>(1u, cycles);
     m_eeCycle += elapsed;
+#if defined(PS2X_ENABLE_EE_DISPATCH_PROFILE)
+    ps2x::ee_profile::ScopedCycleAccounting cycleSample;
+#endif
     m_pendingEeTimerInterrupts |= m_runtime.memory().advanceEeTimers(elapsed);
+#if defined(PS2X_ENABLE_EE_DISPATCH_PROFILE)
+    cycleSample.afterTimers();
+#endif
     m_runtime.advanceIopEeCycles(elapsed);
+#if defined(PS2X_ENABLE_EE_DISPATCH_PROFILE)
+    cycleSample.afterIop();
+#endif
     if (m_pendingEeTimerInterrupts != 0u)
     {
         m_checkpointPending.store(true, std::memory_order_release);

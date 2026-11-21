@@ -50,6 +50,30 @@ struct CallTotals
     uint64_t wallNanoseconds = 0u;
 };
 
+// Thread-cycle measurements for two sequential operations in accountCycles.
+// These are sampled inclusive operation costs, not an EE dispatch cost.
+struct CycleAccountingTotals
+{
+    uint64_t calls = 0u;
+    uint64_t samples = 0u;
+    uint64_t cpuSamples = 0u;
+    uint64_t timerCpuUnits = 0u;
+    uint64_t iopCpuUnits = 0u;
+
+    void add(uint64_t timers, uint64_t iop, bool validCpu) noexcept
+    {
+        ++samples;
+        if (validCpu)
+        {
+            ++cpuSamples;
+            timerCpuUnits += timers;
+            iopCpuUnits += iop;
+        }
+    }
+
+    void clear() noexcept { *this = {}; }
+};
+
 class Accumulator
 {
 public:
@@ -144,8 +168,10 @@ inline bool readThreadCpuNs(uint64_t &value) noexcept
 struct State
 {
     Accumulator measurements;
+    CycleAccountingTotals cycleAccounting;
     std::array<uint64_t, 2> attempts{};
     uint32_t randomState = 0x6d2b79f5u;
+    uint32_t cycleRandomState = 0x579ab2d3u;
     uint64_t firstField = 0u;
     uint64_t cpuAtFirstFieldNs = 0u;
     bool hasCpuStart = false;
@@ -161,6 +187,7 @@ inline void resetWindow(State &s, uint64_t field)
 {
     s.firstField = field;
     s.measurements.clear();
+    s.cycleAccounting.clear();
     s.attempts = {};
     s.hasCpuStart = readThreadCpuNs(s.cpuAtFirstFieldNs);
 }
@@ -180,6 +207,12 @@ inline void emit(State &s, uint64_t field)
               << " outer_calls=" << s.attempts[0]
               << " nested_calls=" << s.attempts[1]
               << " dropped_keys=" << s.measurements.dropped() << '\n';
+    std::cerr << "[ps2x:ee-profile] kind=cycle_accounting"
+              << " calls=" << s.cycleAccounting.calls
+              << " samples=" << s.cycleAccounting.samples
+              << " cpu_samples=" << s.cycleAccounting.cpuSamples
+              << " timer_cpu_units=" << s.cycleAccounting.timerCpuUnits
+              << " iop_cpu_units=" << s.cycleAccounting.iopCpuUnits << '\n';
 
     std::vector<std::pair<CallKey, CallTotals>> ranked(
         s.measurements.rows().begin(), s.measurements.rows().end());
@@ -205,6 +238,56 @@ inline void emit(State &s, uint64_t field)
     // Inclusive nested and outer samples overlap: never add their totals.
 }
 } // namespace detail
+
+// Samples one in 1024 cycle-accounting calls; inactive unless both the
+// compile-time option and PS2X_EE_PROFILE=1 are enabled. Sampling does not
+// change the order or guest-cycle count of timer and IOP advancement.
+class ScopedCycleAccounting
+{
+public:
+    ScopedCycleAccounting() noexcept
+    {
+        if (!detail::enabled())
+            return;
+        auto &s = detail::state();
+        ++s.cycleAccounting.calls;
+        uint32_t &rng = s.cycleRandomState;
+        rng ^= rng << 13;
+        rng ^= rng >> 17;
+        rng ^= rng << 5;
+        if ((rng & 1023u) != 0u)
+            return;
+        m_sampled = true;
+        m_hasStart = detail::readSampleCpu(m_start);
+    }
+
+    void afterTimers() noexcept
+    {
+        if (m_sampled)
+            m_hasTimers = detail::readSampleCpu(m_afterTimers);
+    }
+
+    void afterIop() noexcept
+    {
+        if (!m_sampled)
+            return;
+        uint64_t afterIop = 0u;
+        const bool validCpu = m_hasStart && m_hasTimers &&
+                              detail::readSampleCpu(afterIop) &&
+                              m_afterTimers >= m_start && afterIop >= m_afterTimers;
+        detail::state().cycleAccounting.add(
+            validCpu ? m_afterTimers - m_start : 0u,
+            validCpu ? afterIop - m_afterTimers : 0u,
+            validCpu);
+    }
+
+private:
+    bool m_sampled = false;
+    bool m_hasStart = false;
+    bool m_hasTimers = false;
+    uint64_t m_start = 0u;
+    uint64_t m_afterTimers = 0u;
+};
 
 class ScopedCall
 {

@@ -489,6 +489,26 @@ void register_ps2_runtime_interrupt_tests()
             t.Equals(samples.dropped(), uint64_t(0u), "Window reset must clear overflow counters");
         });
 
+        tc.Run("EE cycle accounting samples keep timer and IOP costs separate", [](TestCase &t)
+        {
+            ps2x::ee_profile::CycleAccountingTotals totals;
+            totals.calls = 3u;
+            totals.add(120u, 340u, true);
+            totals.add(0u, 0u, false);
+            totals.add(80u, 160u, true);
+            t.Equals(totals.calls, uint64_t(3u), "Each cycle-accounting call must be counted");
+            t.Equals(totals.samples, uint64_t(3u), "All attempts selected for sampling must be counted");
+            t.Equals(totals.cpuSamples, uint64_t(2u), "Missing CPU readings must remain visible");
+            t.Equals(totals.timerCpuUnits, uint64_t(200u), "Timer samples must not include IOP costs");
+            t.Equals(totals.iopCpuUnits, uint64_t(500u), "IOP samples must not include timer costs");
+            totals.clear();
+            t.Equals(totals.calls, uint64_t(0u), "Window reset must clear cycle call counts");
+            t.Equals(totals.samples, uint64_t(0u), "Window reset must clear sample counts");
+            t.Equals(totals.cpuSamples, uint64_t(0u), "Window reset must clear valid CPU sample counts");
+            t.Equals(totals.timerCpuUnits, uint64_t(0u), "Window reset must clear timer costs");
+            t.Equals(totals.iopCpuUnits, uint64_t(0u), "Window reset must clear IOP costs");
+        });
+
         tc.Run("negative interrupt-safe EE syscall ids dispatch", [](TestCase &t)
         {
             TestEnv env;
