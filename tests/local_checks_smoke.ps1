@@ -83,6 +83,24 @@ try {
     if ($LASTEXITCODE -ne 0 -or ($fromPush -join ' ') -notmatch 'KZVU reference') {
         throw 'Git pre-push SHA range was not honored.'
     }
+    $stalePush = "refs/heads/main $initial refs/heads/main $initial"
+    $wrongRevisionRejected = $false
+    try {
+        & (Join-Path $root 'scripts\resolve_local_changes.ps1') -ProjectRoot $temporary -PushLines $stalePush | Out-Null
+    } catch { $wrongRevisionRejected = $true }
+    if (-not $wrongRevisionRejected) {
+        throw 'Pre-push accepted a commit other than the tested checkout HEAD.'
+    }
+    $dirtyFile = Join-Path $temporary 'untracked-push-probe.txt'
+    [IO.File]::WriteAllText($dirtyFile, 'pending edit')
+    $dirtyRejected = $false
+    try {
+        & (Join-Path $root 'scripts\resolve_local_changes.ps1') -ProjectRoot $temporary -PushLines $push | Out-Null
+    } catch { $dirtyRejected = $true }
+    if (-not $dirtyRejected) {
+        throw 'Pre-push accepted an uncommitted worktree.'
+    }
+    Remove-Item -LiteralPath $dirtyFile
     & git -C $temporary mv README.md README-renamed.md
     & git -C $temporary commit -qm 'test: rename synthetic notes'
     $renamePaths = @(& (Join-Path $root 'scripts\resolve_local_changes.ps1') -ProjectRoot $temporary -BaseRef $latest)

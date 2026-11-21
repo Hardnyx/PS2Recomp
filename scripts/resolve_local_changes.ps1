@@ -38,6 +38,12 @@ if ($PushInput -or $PushLines.Count -gt 0) {
     $lines = if ($PushLines.Count -gt 0) { @($PushLines) } else {
         @([Console]::In.ReadToEnd() -split '\r?\n' | Where-Object { $_.Trim() })
     }
+    $checkedOut = Resolve-Commit 'HEAD'
+    if (-not $checkedOut) { throw 'Cannot verify the checked-out commit before a push.' }
+    $working = @(& git -C $root status --porcelain --untracked-files=normal)
+    if ($LASTEXITCODE -ne 0 -or $working.Count -gt 0) {
+        throw 'Refusing to validate a push using an uncommitted worktree.'
+    }
     $paths = @()
     foreach ($line in $lines) {
         $fields = @($line.Trim() -split '\s+')
@@ -53,12 +59,15 @@ if ($PushInput -or $PushLines.Count -gt 0) {
         if ($localSha -match '^0{40}$') {
             throw 'Refusing a deletion of main.'
         }
+        $head = Resolve-Commit $localSha
+        if (-not $head) { throw 'The commit to push is not available locally.' }
+        if ($head -ne $checkedOut) {
+            throw 'The commit being pushed differs from checked-out HEAD; tests would use the wrong sources.'
+        }
         if ($remoteSha -match '^0{40}$') {
             Write-Output '*'
             return
         }
-        $head = Resolve-Commit $localSha
-        if (-not $head) { throw 'The commit to push is not available locally.' }
         $base = Resolve-Commit $remoteSha
         if (-not $base) {
             # A shallow or unfetched remote commit must never be treated as empty.
