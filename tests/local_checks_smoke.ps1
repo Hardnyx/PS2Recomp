@@ -55,6 +55,14 @@ try {
     if ($LASTEXITCODE -ne 0 -or ($fromPush -join ' ') -notmatch 'KZVU reference') {
         throw 'Git pre-push SHA range was not honored.'
     }
+    & git -C $temporary mv README.md README-renamed.md
+    & git -C $temporary commit -qm 'test: rename synthetic notes'
+    $renamePaths = @(& (Join-Path $root 'scripts\resolve_local_changes.ps1') -ProjectRoot $temporary -BaseRef $latest)
+    if ($LASTEXITCODE -ne 0 -or
+        $renamePaths -notcontains 'README.md' -or
+        $renamePaths -notcontains 'README-renamed.md') {
+        throw 'Both old and new paths must be reported on rename.'
+    }
     $withoutBaseline = @(& $shell -NoProfile -ExecutionPolicy Bypass -File $runner -ProjectRoot $temporary -ListOnly)
     if ($LASTEXITCODE -ne 0 -or ($withoutBaseline -join ' ') -notmatch 'complete default') {
         throw 'Missing verified-baseline marker must select the complete suite.'
