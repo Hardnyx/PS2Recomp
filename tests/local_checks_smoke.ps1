@@ -101,6 +101,22 @@ try {
         throw 'Pre-push accepted an uncommitted worktree.'
     }
     Remove-Item -LiteralPath $dirtyFile
+    $unfetchedRemote = "refs/heads/main $latest refs/heads/main 1111111111111111111111111111111111111111"
+    $remoteRejected = $false
+    try {
+        & (Join-Path $root 'scripts\resolve_local_changes.ps1') -ProjectRoot $temporary -PushLines $unfetchedRemote | Out-Null
+    } catch { $remoteRejected = $true }
+    if (-not $remoteRejected) {
+        throw 'Unknown remote history was accepted without knowing the changed paths.'
+    }
+    $newRemote = "refs/heads/main $latest refs/heads/main 0000000000000000000000000000000000000000"
+    $newRemoteRejected = $false
+    try {
+        & (Join-Path $root 'scripts\resolve_local_changes.ps1') -ProjectRoot $temporary -PushLines $newRemote | Out-Null
+    } catch { $newRemoteRejected = $true }
+    if (-not $newRemoteRejected) {
+        throw 'A new remote main was accepted without an explicit validation path.'
+    }
     & git -C $temporary mv README.md README-renamed.md
     & git -C $temporary commit -qm 'test: rename synthetic notes'
     $renamePaths = @(& (Join-Path $root 'scripts\resolve_local_changes.ps1') -ProjectRoot $temporary -BaseRef $latest)

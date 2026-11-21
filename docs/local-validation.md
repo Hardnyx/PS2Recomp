@@ -39,8 +39,8 @@ out/local-kzvu. The normal build does not rewrite local repositories.
 The optional repository-local pre-push hook reads the actual local and
 remote refs and SHA pairs provided by Git. It permits only main pushes,
 rejects deletions/non-fast-forward updates, and validates every committed
-change being pushed. If the remote SHA is unavailable locally, the full
-suite is selected. No origin/main assumption is made.
+change being pushed. If the remote SHA is unavailable locally, the hook rejects the push until
+the remote history is fetched; unknown changes cannot receive a false green. No origin/main assumption is made.
 
 Install only after the Windows regression checks pass:
 

@@ -31,6 +31,9 @@ function Get-RangePaths([string]$Base, [string]$Head) {
     return $names
 }
 if ($ChangedFiles.Count -gt 0) {
+    if ($PushInput -or $PushLines.Count -gt 0) {
+        throw 'Injected changed-file lists cannot replace pre-push SHA validation.'
+    }
     $ChangedFiles | Where-Object { $_ } | Sort-Object -Unique
     return
 }
@@ -65,14 +68,12 @@ if ($PushInput -or $PushLines.Count -gt 0) {
             throw 'The commit being pushed differs from checked-out HEAD; tests would use the wrong sources.'
         }
         if ($remoteSha -match '^0{40}$') {
-            Write-Output '*'
-            return
+            throw 'Remote main does not exist. New branch creation requires separate explicit validation.'
         }
         $base = Resolve-Commit $remoteSha
         if (-not $base) {
-            # A shallow or unfetched remote commit must never be treated as empty.
-            Write-Output '*'
-            return
+            # The remote history must be available to identify every pushed path.
+            throw 'Remote commit is unavailable locally. Fetch the remote ref before validating this push.'
         }
         $paths += @(Get-RangePaths $base $head)
     }
