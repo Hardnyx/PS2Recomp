@@ -1,16 +1,6 @@
 name: Public VU reference regression
 
 on:
-  push:
-    branches: [main]
-    paths:
-      - 'CMakeLists.txt'
-      - 'ps2xRuntime/**'
-      - 'ps2xTest/**'
-      - 'ps2xIOP/**'
-      - 'ps2xRecomp/**'
-      - 'ps2xAnalyzer/**'
-      - '.github/workflows/vu-component.yml'
   workflow_dispatch:
 
 permissions:

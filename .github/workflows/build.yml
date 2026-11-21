@@ -1,17 +1,6 @@
 name: build
 
 on:
-  push:
-    branches: [main]
-    paths:
-      - 'CMakeLists.txt'
-      - 'ps2x*/**'
-      - '.github/workflows/build.yml'
-  pull_request:
-    paths:
-      - 'CMakeLists.txt'
-      - 'ps2x*/**'
-      - '.github/workflows/build.yml'
   workflow_dispatch:
 
 permissions:

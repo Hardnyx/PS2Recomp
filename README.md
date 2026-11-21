@@ -16,6 +16,14 @@ Also check our [WIKI](https://github.com/ran-j/PS2Recomp/wiki)
 
 This project statically recompiles PS2 ELF binaries into C++ and provides a runtime to execute the generated code.
 
+### Local-first validation
+
+Use scripts/check_local.ps1 from this Windows checkout to build and run native
+component tests incrementally. Only compiled source changes invoke local tests
+by default; documentation and workflow changes are skipped. See
+[Local testing](docs/local-validation.md). GitHub Actions workflows are
+manual-only to prevent repeated hosted builds on each commit.
+
 ### Modules
 
 * `ps2xAnalyzer`: scans ELF/functions and writes TOML config (`stubs`, `skip`, instruction patches).

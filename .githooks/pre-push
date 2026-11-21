@@ -1,0 +1,4 @@
+#!/bin/sh
+# Run relevant Windows component checks before a local push, not in the cloud.
+root=$(git rev-parse --show-toplevel) || exit 1
+exec powershell.exe -NoProfile -ExecutionPolicy Bypass -File "$root/scripts/check_local.ps1" -Mode Changed -BaseRef origin/main
