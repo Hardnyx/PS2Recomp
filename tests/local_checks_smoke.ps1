@@ -9,6 +9,10 @@ $hookPath = Join-Path $root '.githooks\pre-push'
 if (-not (Test-Path -LiteralPath $hookPath -PathType Leaf)) {
     throw 'The repository-local pre-push hook is missing.'
 }
+$hookText = Get-Content -LiteralPath $hookPath -Raw
+if (-not $hookText.Contains('check_local.ps1') -or -not $hookText.Contains('-PushInput')) {
+    throw 'The pre-push hook must pass Git ref updates to the local checker.'
+}
 $hookEntry = @(& git -C $root ls-files --stage -- .githooks/pre-push)
 if ($LASTEXITCODE -ne 0 -or $hookEntry.Count -ne 1 -or $hookEntry[0] -notmatch '^100755 ') {
     throw 'The tracked pre-push hook must retain executable mode 100755.'
