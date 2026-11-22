@@ -154,7 +154,31 @@ try {
     if ($LASTEXITCODE -ne 0 -or ($fromLastOnly -join ' ') -notmatch 'SKIP') {
         throw 'Synthetic latest documentation-only commit is not isolated.'
     }
+    & {
+        # Validate the actual configure command without compiling or fetching.
+        function cmake {
+            if ($args -notcontains '-DCMAKE_BUILD_TYPE=Release' -or
+                $args -notcontains 'NMake Makefiles' -or
+                $args -notcontains '-DFETCHCONTENT_FULLY_DISCONNECTED=ON') {
+                throw 'Native configuration must explicitly select offline NMake Release.'
+            }
+            throw 'Native configure intercepted by smoke test.'
+        }
+        $intercepted = $false
+        try {
+            & $runner -ProjectRoot $temporary -Mode Default | Out-Null
+        } catch {
+            if ($_.Exception.Message -ne 'Native configure intercepted by smoke test.') { throw }
+            $intercepted = $true
+        }
+        if (-not $intercepted) { throw 'The native configure boundary was not exercised.' }
+    }
 } finally {
+    $resolved = [IO.Path]::GetFullPath($temporary)
+    $tempRoot = [IO.Path]::GetFullPath([IO.Path]::GetTempPath()).TrimEnd('\') + '\'
+    if (-not $resolved.StartsWith($tempRoot, [StringComparison]::OrdinalIgnoreCase)) {
+        throw 'Fixture cleanup escaped the temporary directory.'
+    }
     if (Test-Path -LiteralPath $temporary) {
         Remove-Item -LiteralPath $temporary -Recurse -Force
     }

@@ -28,7 +28,9 @@ Reference validation needs -KzvuSourceRoot and -Pcsx2Root pointing to
 clean existing source trees at the pinned KillzoneRecomp and PCSX2 SHAs.
 A missing reference is a failure, not a successful skipped test.
 
-CMake uses NMake Makefiles and explicit build/component options.
+CMake uses NMake Makefiles, `CMAKE_BUILD_TYPE=Release` and explicit
+build/component options. NMake ignores `--config Release` when choosing
+compiler flags; the configuration must be selected before building.
 Cached generator conflicts fail rather than deleting another build.
 Dependency fetching is disabled; prepare the source dependencies locally
 before running. Outputs are incremental in out/local-default and

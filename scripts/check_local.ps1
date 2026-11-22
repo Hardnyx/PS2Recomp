@@ -3,7 +3,7 @@
 [CmdletBinding()]
 param(
     [ValidateSet('Changed', 'Default', 'Reference', 'Build')][string]$Mode = 'Changed',
-    [string]$ProjectRoot = (Split-Path -Parent $PSScriptRoot),
+    [string]$ProjectRoot = '',
     [string]$BaseRef = '',
     [string]$HeadRef = 'HEAD',
     [string[]]$ChangedFiles = @(),
@@ -16,7 +16,7 @@ param(
 )
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
-$root = [IO.Path]::GetFullPath($ProjectRoot)
+$root = if ($ProjectRoot) { [IO.Path]::GetFullPath($ProjectRoot) } else { Split-Path -Parent $PSScriptRoot }
 $runDefault = $Mode -in @('Default', 'Build')
 $runReference = $Mode -eq 'Reference'
 $runBuild = $Mode -eq 'Build'
@@ -117,6 +117,7 @@ if (-not ($runDefault -or $runReference)) {
             }
         }
         $args = @('-S', $root, '-B', $build, '-G', $Generator,
+                  '-DCMAKE_BUILD_TYPE=Release',
                   '-DPS2X_BUILD_RECOMP=ON', '-DPS2X_BUILD_RUNTIME=ON',
                   '-DPS2X_BUILD_ANALYZER=ON', '-DPS2X_BUILD_TEST=ON',
                   '-DPS2X_BUILD_STUDIO=OFF', '-DPS2X_ENABLE_DEBUG_UI=OFF',

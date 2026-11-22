@@ -2,7 +2,7 @@
 # Resolve all pushed, committed, staged, unstaged and untracked path changes.
 [CmdletBinding()]
 param(
-    [string]$ProjectRoot = (Split-Path -Parent $PSScriptRoot),
+    [string]$ProjectRoot = '',
     [string]$BaseRef = '',
     [string]$HeadRef = 'HEAD',
     [string[]]$ChangedFiles = @(),
@@ -12,7 +12,7 @@ param(
 )
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
-$root = [IO.Path]::GetFullPath($ProjectRoot)
+$root = if ($ProjectRoot) { [IO.Path]::GetFullPath($ProjectRoot) } else { Split-Path -Parent $PSScriptRoot }
 
 function Resolve-Commit([string]$Reference) {
     if (-not $Reference) { return '' }
