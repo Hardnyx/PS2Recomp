@@ -34,11 +34,15 @@ validation before the port changes its declared source pin.
 
 MSVC x64 19.51.36248 built the ordinary Release component suite at
 `9f5083b` with the existing local dependency sources, FFmpeg and debug UI
-disabled, and no KZVU reference backend. The result was 511/512 tests passed.
-The failing case is `latched host presentation reads preferred CT32 source
-with GS swizzle` in `ps2xTest/src/ps2_gs_tests.cpp`; both preferred-source
-image checks fail. This run does not validate the optional KZVU configuration
-or a Tekken scene. Preserve this failure when assessing source promotion.
+disabled, and no KZVU reference backend. The initial result was 511/512 tests
+passed. The positive case `latched host presentation reads preferred CT32
+source with GS swizzle` used overlapping source/display ranges: source blocks
+`[64, 4864)` overlap display blocks starting at `4800`. The runtime correctly
+rejects the preferred-source shortcut for that layout. Moving only this
+fixture's display base to page 160, block 5120, makes the ranges disjoint.
+The rebuilt suite passes 512/512, including the existing overlap-rejection
+controls. Runtime behavior is unchanged. This run does not validate the
+optional KZVU configuration or a Tekken scene.
 
 The Windows PowerShell 5.1 selector regression passes. Local checking now
 resolves its default root after script initialization and configures NMake

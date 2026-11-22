@@ -1624,11 +1624,13 @@ void register_ps2_gs_tests()
 
         tc.Run("latched host presentation reads preferred CT32 source with GS swizzle", [](TestCase &t)
         {
+            // Source blocks [64, 4864) must not overlap this display page.
+            constexpr uint32_t kDisplayFbp = 160u;
             std::vector<uint8_t> vram(PS2_GS_VRAM_SIZE, 0u);
             GSRegisters regs{};
             regs.pmode = 1ull;
             regs.dispfb1 =
-                150ull |
+                static_cast<uint64_t>(kDisplayFbp) |
                 (10ull << 9) |
                 (static_cast<uint64_t>(GS_PSM_CT32) << 15);
             regs.display1 =
@@ -1643,10 +1645,10 @@ void register_ps2_gs_tests()
             constexpr uint32_t kDisplayPixelRow1 = 0x00CCBBAAu;
             const uint32_t swizzledSourceOff = GSPSMCT32::addrPSMCT32(kSourceTbp0, 10u, 0u, 1u);
             std::memcpy(vram.data() + swizzledSourceOff, &kSourcePixelRow1, sizeof(kSourcePixelRow1));
-            writeReferenceFramePSMCT32Pixel(vram, 150u, 10u, 0u, 1u, kDisplayPixelRow1);
+            writeReferenceFramePSMCT32Pixel(vram, kDisplayFbp, 10u, 0u, 1u, kDisplayPixelRow1);
 
             constexpr uint64_t kFrame2 =
-                150ull |
+                static_cast<uint64_t>(kDisplayFbp) |
                 (10ull << 16) |
                 (static_cast<uint64_t>(GS_PSM_CT32) << 24);
             constexpr uint64_t kZbuf2 = (static_cast<uint64_t>(1) << 32);
@@ -1720,7 +1722,7 @@ void register_ps2_gs_tests()
                      "preferred-source presentation should produce a host frame");
             t.IsTrue(usedPreferred,
                      "preferred-source presentation should use the fullscreen copy source");
-            t.Equals(displayFbp, 150u,
+            t.Equals(displayFbp, kDisplayFbp,
                      "preferred-source presentation should still target the display page");
             t.Equals(sourceFbp, kSourceTbp0,
                      "preferred-source presentation should report the CT32 source frame");
