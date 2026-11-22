@@ -335,6 +335,10 @@ public:
     int removeIrqHandler(bool dmac, uint32_t cause, int id);
     int setIrqHandlerEnabled(bool dmac, int id, bool enabled);
     int setIrqCauseEnabled(bool dmac, uint32_t cause, bool enabled);
+    [[nodiscard]] bool isDmacCauseEnabled(uint32_t cause) const
+    {
+        return cause < 32u && (m_enabledDmacMask & (1u << cause)) != 0u;
+    }
     void dispatchIrq(bool dmac, uint32_t cause);
     void setVSyncFlag(uint32_t flagAddress, uint32_t tickAddress);
     [[nodiscard]] uint64_t currentVSyncTick() const noexcept;

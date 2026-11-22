@@ -460,8 +460,11 @@ namespace
     }
 }
 
+void register_ps2_dmac_meis_interrupt_tests();
+
 void register_ps2_runtime_interrupt_tests()
 {
+    register_ps2_dmac_meis_interrupt_tests();
     MiniTest::Case("PS2RuntimeInterrupt", [](TestCase &tc)
     {
         tc.Run("EE dispatch sample aggregation keeps outer and nested calls separate", [](TestCase &t)
@@ -1378,6 +1381,133 @@ void register_ps2_runtime_interrupt_tests()
                       "the scheduler stop path should not throw");
 
             cleanupRuntime(env);
+        });
+    });
+}
+
+namespace
+{
+    constexpr uint32_t kMeisDriverPc = 0x00160A00u;
+    constexpr uint32_t kMeisHandlerPc = 0x00160B00u;
+    uint32_t g_meisMode = 0u;
+    uint32_t g_meisCalls = 0u;
+    uint32_t g_meisCause = 0u;
+    uint32_t g_meisArgument = 0u;
+    int g_meisHandlerId = 0;
+    std::vector<uint32_t> g_meisObserved;
+
+    void meisHandler(uint8_t *, R5900Context *ctx, PS2Runtime *)
+    {
+        ++g_meisCalls;
+        g_meisCause = getRegU32(ctx, 4);
+        g_meisArgument = getRegU32(ctx, 5);
+        ctx->pc = 0u;
+    }
+
+    void meisDriver(uint8_t *ram, R5900Context *ctx, PS2Runtime *runtime)
+    {
+        PS2Memory &memory = runtime->memory();
+        constexpr uint32_t dstat = 0x1000E010u, meis = 1u << 14u, meim = 1u << 30u;
+        const uint32_t phase = (ctx->pc - kMeisDriverPc) / 16u;
+        const uint32_t beforeDstat = memory.read32(dstat);
+        g_meisObserved.push_back(g_meisCalls);
+        if (phase == 0u)
+        {
+            setRegU32(*ctx, 4, 14u); setRegU32(*ctx, 5, kMeisHandlerPc);
+            setRegU32(*ctx, 6, 1u); setRegU32(*ctx, 7, 0xC0DEu);
+            AddDmacHandler(ram, ctx, runtime);
+            g_meisHandlerId = getRegS32(*ctx, 2);
+            setRegU32(*ctx, 4, 14u);
+            if (g_meisMode == 1u || g_meisMode == 4u)
+                DisableDmac(ram, ctx, runtime);
+            else
+                EnableDmac(ram, ctx, runtime);
+            if (g_meisMode == 3u)
+            {
+                setRegU32(*ctx, 5, static_cast<uint32_t>(g_meisHandlerId));
+                DisableDmacHandler(ram, ctx, runtime);
+            }
+            if (g_meisMode != 0u) memory.write32(dstat, meim);
+            memory.write32(0x1000E000u, 9u); memory.write32(0x1000E040u, 0xF0u);
+            memory.write32(0x1000E050u, 0x10000u); memory.write32(0x1000D010u, 0x10000u);
+            memory.write32(0x10009030u, 0x10000u); memory.write32(0x10009000u, 0x105u);
+            if (g_meisMode == 2u) memory.write32(dstat, meim);
+            runtime->drainCompletedDmacHandlers(ram);
+        }
+        else if (phase == 1u)
+        {
+            if (g_meisMode == 4u) memory.write32(dstat, meis);
+            if (g_meisMode == 0u || g_meisMode == 2u) memory.write32(dstat, meim);
+            if (g_meisMode == 1u || g_meisMode == 4u)
+            {
+                setRegU32(*ctx, 4, 14u); EnableDmac(ram, ctx, runtime);
+            }
+            if (g_meisMode == 3u)
+            {
+                setRegU32(*ctx, 5, static_cast<uint32_t>(g_meisHandlerId));
+                EnableDmacHandler(ram, ctx, runtime);
+            }
+            runtime->drainCompletedDmacHandlers(ram);
+        }
+        else if (phase == 2u)
+        {
+            memory.write32(dstat, meim); memory.write32(dstat, meim);
+            // Acknowledge-cancelled mode must not manufacture a new empty poll.
+            if (g_meisMode != 4u)
+                memory.tryProcessMfifoVif1(0x10009000u, memory.read32(0x10009000u), false);
+            runtime->drainCompletedDmacHandlers(ram);
+        }
+        else if (phase == 3u)
+        {
+            memory.write32(dstat, meis);
+            // Produce and consume a genuine END event after acknowledging the old one.
+            memory.write64(0x70000000u, 0x70000000ull);
+            memory.write32(0x1000D080u, 0u); memory.write32(0x1000D020u, 1u); memory.write32(0x1000D000u, 0x100u);
+            runtime->drainCompletedDmacHandlers(ram);
+        }
+        else
+        {
+            ctx->pc = 0u;
+            runtime->requestStop();
+        }
+        std::cout << "[MEIS-IRQ] mode=" << g_meisMode << " phase=" << phase
+                  << " calls=" << g_meisCalls << " before_D_STAT=0x" << std::hex
+                  << beforeDstat << " D_STAT=0x"
+                  << memory.read32(dstat) << std::dec << '\n';
+        if (phase < 4u) ctx->pc = kMeisDriverPc + (phase + 1u) * 16u;
+    }
+}
+
+void register_ps2_dmac_meis_interrupt_tests()
+{
+    MiniTest::Case("PS2RuntimeMfifoEmpty", [](TestCase &tc)
+    {
+        tc.Run("MEIS handler uses hardware masking SDK enablement and existing deferred dispatch", [](TestCase &t)
+        {
+            for (uint32_t mode : {0u, 1u, 2u, 3u, 4u})
+            {
+                TestEnv env;
+                PS2Memory &memory = env.runtime.memory();
+                t.IsTrue(memory.initialize(), "MEIS runtime fixture initializes");
+                g_meisMode = mode; g_meisCalls = 0u; g_meisCause = 0u; g_meisArgument = 0u;
+                g_meisObserved.clear();
+                for (uint32_t phase = 0u; phase < 5u; ++phase)
+                    env.runtime.registerFunction(kMeisDriverPc + phase * 16u, meisDriver);
+                env.runtime.registerFunction(kMeisHandlerPc, meisHandler);
+                R5900Context context{}; context.pc = kMeisDriverPc;
+                env.runtime.eeScheduler().reset(memory.getRDRAM(), context);
+                env.runtime.eeScheduler().run();
+                const bool withheld = mode == 3u || mode == 4u;
+                const std::vector<uint32_t> expected = withheld
+                    ? std::vector<uint32_t>{0u, 0u, 0u, 0u, 1u}
+                    : std::vector<uint32_t>{0u, 0u, 1u, 1u, 2u};
+                t.IsTrue(g_meisObserved == expected, "MEIS deliveries must follow independent hardware/SDK/handler gates exactly once");
+                t.IsTrue(g_meisHandlerId > 0, "AddDmacHandler accepts cause 14");
+                t.Equals(g_meisCause, 14u, "handler receives DMAC_MEIS");
+                t.Equals(g_meisArgument, 0xC0DEu, "handler retains its SDK registration argument");
+                t.IsTrue((memory.read32(0x1000E010u) & 0xC0004000u) == 0xC0004000u,
+                         "delivery does not acknowledge hardware MEIS or disable MEIM");
+            }
         });
     });
 }

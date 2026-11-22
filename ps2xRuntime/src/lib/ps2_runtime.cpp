@@ -1563,7 +1563,7 @@ void PS2Runtime::handleBreak(uint8_t *rdram, R5900Context *ctx)
 
 void PS2Runtime::drainCompletedDmacHandlers(uint8_t *rdram)
 {
-    for (uint32_t cause : m_memory.consumeCompletedDmacCauses())
+    for (uint32_t cause : m_memory.consumeCompletedDmacCauses(m_eeScheduler->isDmacCauseEnabled(14u)))
     {
         ps2_syscalls::dispatchDmacHandlersForCause(rdram, this, cause);
     }

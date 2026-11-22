@@ -14,6 +14,10 @@ bool PS2Memory::tryProcessMfifoVif1(uint32_t channelBase, uint32_t chcr, bool re
         const uint32_t writer = m_ioRegisters[0x1000D010u] & 0x7FFFFFF0u;
         return ((writer - addr) & mask) / 16u;
     };
+    const auto empty = [&]() {
+        vif1_regs.stat &= ~0x1F000000u; // VIF1 FQC has no ring data available.
+        latchDmacStatus(14u);
+    };
     const auto consume = [&](const uint8_t *data, uint32_t bytes) {
         m_vif1DmaStallRequested = false;
         m_vif1DmaProcessing = true;
@@ -44,7 +48,10 @@ bool PS2Memory::tryProcessMfifoVif1(uint32_t channelBase, uint32_t chcr, bool re
             const uint32_t tagAddr = wrap(m_ioRegisters[channelBase + 0x30u]);
             m_ioRegisters[channelBase + 0x30u] = tagAddr;
             if (available(tagAddr) == 0u)
+            {
+                empty();
                 return true; // Keep STR and TADR while waiting for the producer.
+            }
             uint64_t tag = 0u;
             std::memcpy(&tag, m_rdram + tagAddr, sizeof(tag));
             const uint32_t qwc = static_cast<uint32_t>(tag & 0xFFFFu);
@@ -84,6 +91,10 @@ bool PS2Memory::tryProcessMfifoVif1(uint32_t channelBase, uint32_t chcr, bool re
             m_ioRegisters[channelBase + 0x10u] = state.dataAddr;
             m_ioRegisters[channelBase + 0x20u] = qwc;
             m_ioRegisters[channelBase + 0x30u] = afterTag;
+            // An exhausted ring does not prevent external REF-family data
+            // from running. It still latches MFIFO Empty before that payload.
+            if (qwc != 0u && available(afterTag) == 0u)
+                empty();
             state.tagBytes = (chcr & 0x40u) != 0u ? 8u : 0u;
             if (state.tagBytes != 0u)
                 std::memcpy(&state.tagData, m_rdram + tagAddr + 8u, sizeof(state.tagData));
@@ -105,7 +116,10 @@ bool PS2Memory::tryProcessMfifoVif1(uint32_t channelBase, uint32_t chcr, bool re
                 count = std::min(count, available(state.dataAddr));
                 count = std::min(count, (base + size - state.dataAddr) / 16u);
                 if (count == 0u)
+                {
+                    empty();
                     return true;
+                }
             }
             const bool scratch = !state.ringPayload && isScratchpad(state.dataAddr);
             const uint32_t offset = translateAddress(state.dataAddr) + state.payloadOffset;
@@ -128,7 +142,11 @@ bool PS2Memory::tryProcessMfifoVif1(uint32_t channelBase, uint32_t chcr, bool re
             m_ioRegisters[channelBase + 0x10u] = state.dataAddr;
             m_ioRegisters[channelBase + 0x20u] = state.remaining;
             if (state.ringPayload)
+            {
                 m_ioRegisters[channelBase + 0x30u] = state.dataAddr;
+                if (available(state.dataAddr) == 0u)
+                    empty();
+            }
             if (consumed < bytes || (vif1_regs.stat & (1u << 10u)) != 0u)
                 return true;
             if (state.remaining != 0u)
@@ -139,6 +157,8 @@ bool PS2Memory::tryProcessMfifoVif1(uint32_t channelBase, uint32_t chcr, bool re
         state.pending = false;
         if (done)
         {
+            if (available(state.nextTag) == 0u)
+                empty();
             completeDmacChannel(channelBase, 1u);
             return true;
         }

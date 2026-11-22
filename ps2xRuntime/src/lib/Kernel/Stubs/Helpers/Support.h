@@ -1,3 +1,4 @@
+#include "runtime/ee_scheduler.h"
 #include <algorithm>
 #include <cctype>
 
@@ -1377,7 +1378,8 @@ namespace
         mem.writeIORegister(channelBase + 0x00u, chcr);
         mem.processPendingTransfers();
 
-        std::vector<uint32_t> completedCauses = mem.consumeCompletedDmacCauses();
+        std::vector<uint32_t> completedCauses = mem.consumeCompletedDmacCauses(
+            runtime->eeScheduler().isDmacCauseEnabled(14u));
         if (completedCauses.empty() && (mem.readIORegister(channelBase + 0x00u) & 0x100u) == 0u)
         {
             if (channelBase == 0x10008000u)

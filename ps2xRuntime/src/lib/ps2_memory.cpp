@@ -200,6 +200,19 @@ namespace
         return address;
     }
 
+    constexpr uint32_t kDmacStatusBits = 0x0000E3FFu;
+    constexpr uint32_t kDmacMaskBits = 0x63FF0000u;
+    constexpr uint32_t kDmacMeis = 1u << 14u;
+    constexpr uint32_t kDmacMeim = 1u << 30u;
+
+    constexpr uint32_t dmacStatusWithSummary(uint32_t value)
+    {
+        value &= kDmacStatusBits | kDmacMaskBits;
+        const bool maskedStatus = ((value & (value >> 16u)) & 0x63FFu) != 0u;
+        const bool busError = (value & (1u << 15u)) != 0u;
+        return value | ((maskedStatus || busError) ? (1u << 31u) : 0u);
+    }
+
     struct DmaTagView
     {
         uint16_t qwc = 0;
@@ -334,6 +347,8 @@ bool PS2Memory::initialize(size_t ramSize)
     {
         std::lock_guard<std::mutex> lock(m_completedDmacMutex);
         m_completedDmacCauses.clear();
+        m_mfifoEmptyQueued = false;
+        m_mfifoEmptyDelivered = false;
     }
     m_codeRegions.clear();
     m_path3Masked = false;
@@ -1266,19 +1281,11 @@ bool PS2Memory::writeIORegister(uint32_t address, uint32_t value)
 
     if (address == 0x1000E010u)
     {
-        const uint32_t current = m_ioRegisters.count(address) ? m_ioRegisters[address] : 0u;
-        uint32_t status = current & 0x3FFu;
-        uint32_t mask = (current >> 16) & 0x3FFu;
-
-        // D_STAT low bits are W1C status, high bits [16..25] toggle masks on write-one.
-        status &= ~(value & 0x3FFu);
-        mask ^= ((value >> 16) & 0x3FFu);
-
-        uint32_t next = (current & ~((0x3FFu) | (0x3FFu << 16) | (1u << 31)));
-        next |= status | (mask << 16);
-        if ((status & mask) != 0u)
-            next |= (1u << 31);
-        m_ioRegisters[address] = next;
+        const uint32_t current = m_ioRegisters[address];
+        // Status is W1C, masks are W1T, and INT1 is computed, never written.
+        const uint32_t status = (current & kDmacStatusBits) & ~value;
+        const uint32_t masks = (current ^ value) & kDmacMaskBits;
+        updateDmacStatus(status | masks);
         return true;
     }
 
@@ -1754,20 +1761,40 @@ bool PS2Memory::tryProcessScratchpadDma(uint32_t channelBase, uint32_t chcr)
     return true;
 }
 
+void PS2Memory::updateDmacStatus(uint32_t value)
+{
+    m_ioRegisters[0x1000E010u] = dmacStatusWithSummary(value);
+    bool notify = false;
+    {
+        std::lock_guard<std::mutex> lock(m_completedDmacMutex);
+        if ((value & kDmacMeis) == 0u)
+        {
+            // W1C also cancels an occurrence not yet drained by the EE.
+            std::erase(m_completedDmacCauses, 14u);
+            m_mfifoEmptyQueued = false;
+            m_mfifoEmptyDelivered = false;
+        }
+        else if ((value & kDmacMeim) != 0u &&
+                 !m_mfifoEmptyQueued && !m_mfifoEmptyDelivered)
+        {
+            m_mfifoEmptyQueued = true;
+            notify = true;
+        }
+    }
+    if (notify)
+        queueCompletedDmacCause(14u);
+}
+
+void PS2Memory::latchDmacStatus(uint32_t cause)
+{
+    if (cause < 16u && ((1u << cause) & kDmacStatusBits) != 0u)
+        updateDmacStatus(m_ioRegisters[0x1000E010u] | (1u << cause));
+}
+
 void PS2Memory::completeDmacChannel(uint32_t channelBase, uint32_t cause)
 {
-    static constexpr uint32_t kDStat = 0x1000E010u;
     m_ioRegisters[channelBase] &= ~0x100u;
-
-    uint32_t dstat = m_ioRegisters.count(kDStat) ? m_ioRegisters[kDStat] : 0u;
-    dstat |= 1u << cause;
-    const uint32_t status = dstat & 0x3FFu;
-    const uint32_t mask = (dstat >> 16u) & 0x3FFu;
-    if ((status & mask) != 0u)
-        dstat |= 1u << 31u;
-    else
-        dstat &= ~(1u << 31u);
-    m_ioRegisters[kDStat] = dstat;
+    latchDmacStatus(cause);
     queueCompletedDmacCause(cause);
 }
 
@@ -1983,40 +2010,24 @@ void PS2Memory::processPendingTransfers()
     static constexpr uint32_t GIF_CHANNEL = 0x1000A000;
     static constexpr uint32_t VIF0_CHANNEL = 0x10008000;
     static constexpr uint32_t VIF1_CHANNEL = 0x10009000;
-    static constexpr uint32_t D_STAT = 0x1000E010u;
-
-    auto raiseDStatChannel = [&](uint32_t channelBit)
-    {
-        uint32_t dstat = m_ioRegisters.count(D_STAT) ? m_ioRegisters[D_STAT] : 0u;
-        dstat |= (1u << channelBit);
-
-        const uint32_t status = dstat & 0x3FFu;
-        const uint32_t mask = (dstat >> 16) & 0x3FFu;
-        if ((status & mask) != 0u)
-            dstat |= (1u << 31);
-        else
-            dstat &= ~(1u << 31);
-
-        m_ioRegisters[D_STAT] = dstat;
-    };
 
     if (hadGif)
     {
-        raiseDStatChannel(2u); // GIF channel
+        latchDmacStatus(2u); // GIF channel
         queueCompletedDmacCause(2u);
         m_ioRegisters[GIF_CHANNEL + 0x00] &= ~0x100u;
         m_ioRegisters[GIF_CHANNEL + 0x20] = 0;
     }
     if (hadVif0)
     {
-        raiseDStatChannel(0u); // VIF0 channel
+        latchDmacStatus(0u); // VIF0 channel
         queueCompletedDmacCause(0u);
         m_ioRegisters[VIF0_CHANNEL + 0x00] &= ~0x100u;
         m_ioRegisters[VIF0_CHANNEL + 0x20] = 0;
     }
     if (completedVif1)
     {
-        raiseDStatChannel(1u); // VIF1 channel
+        latchDmacStatus(1u); // VIF1 channel
         queueCompletedDmacCause(1u);
         m_ioRegisters[VIF1_CHANNEL + 0x00] &= ~0x100u;
         m_ioRegisters[VIF1_CHANNEL + 0x20] = 0;
@@ -2029,11 +2040,39 @@ void PS2Memory::queueCompletedDmacCause(uint32_t cause)
     m_completedDmacCauses.push_back(cause);
 }
 
-std::vector<uint32_t> PS2Memory::consumeCompletedDmacCauses()
+std::vector<uint32_t> PS2Memory::consumeCompletedDmacCauses(bool consumeMfifoEmpty)
 {
     std::lock_guard<std::mutex> lock(m_completedDmacMutex);
     std::vector<uint32_t> causes;
-    causes.swap(m_completedDmacCauses);
+    std::vector<uint32_t> retained;
+    const uint32_t dstat = m_ioRegisters[0x1000E010u];
+    for (uint32_t cause : m_completedDmacCauses)
+    {
+        if (cause != 14u)
+        {
+            causes.push_back(cause);
+            continue;
+        }
+        if ((dstat & kDmacMeis) == 0u)
+        {
+            m_mfifoEmptyQueued = false;
+            continue;
+        }
+        // Keep hardware mask and SDK cause filtering separate. A filtered
+        // occurrence stays on the existing deferred queue until enabled or W1C.
+        if (!consumeMfifoEmpty || (dstat & kDmacMeim) == 0u)
+        {
+            retained.push_back(cause);
+            continue;
+        }
+        if (!m_mfifoEmptyDelivered)
+        {
+            causes.push_back(cause);
+            m_mfifoEmptyDelivered = true;
+        }
+        m_mfifoEmptyQueued = false;
+    }
+    m_completedDmacCauses.swap(retained);
     return causes;
 }
 
@@ -2122,7 +2161,6 @@ void PS2Memory::processGIFPacket(const uint8_t *data, uint32_t sizeBytes)
 bool PS2Memory::tryProcessNativeGifImageUploadChain(GS &gs, uint32_t tadr, uint32_t chcr)
 {
     static constexpr uint32_t GIF_CHANNEL = 0x1000A000u;
-    static constexpr uint32_t D_STAT = 0x1000E010u;
     static constexpr uint32_t D_CTRL = 0x1000E000u;
 
     if (!m_rdram || !m_gsVRAM || m_path3Masked)
@@ -2299,15 +2337,7 @@ bool PS2Memory::tryProcessNativeGifImageUploadChain(GS &gs, uint32_t tadr, uint3
     m_ioRegisters[GIF_CHANNEL + 0x00u] = ((chcr & 0x0000FFFFu) | (lastTagUpper << 16u)) & ~0x100u;
     m_ioRegisters[GIF_CHANNEL + 0x20u] = 0u;
 
-    uint32_t dstat = m_ioRegisters.count(D_STAT) ? m_ioRegisters[D_STAT] : 0u;
-    dstat |= (1u << 2u);
-    const uint32_t status = dstat & 0x3FFu;
-    const uint32_t mask = (dstat >> 16u) & 0x3FFu;
-    if ((status & mask) != 0u)
-        dstat |= (1u << 31u);
-    else
-        dstat &= ~(1u << 31u);
-    m_ioRegisters[D_STAT] = dstat;
+    latchDmacStatus(2u);
     queueCompletedDmacCause(2u);
     return true;
 }
@@ -2315,7 +2345,6 @@ bool PS2Memory::tryProcessNativeGifImageUploadChain(GS &gs, uint32_t tadr, uint3
 bool PS2Memory::tryProcessNativeGifPackedChain(GS &gs, uint32_t tadr, uint32_t chcr)
 {
     static constexpr uint32_t GIF_CHANNEL = 0x1000A000u;
-    static constexpr uint32_t D_STAT = 0x1000E010u;
     static constexpr uint32_t D_CTRL = 0x1000E000u;
 
     if (!m_rdram || !m_gsVRAM || m_path3Masked)
@@ -2380,15 +2409,7 @@ bool PS2Memory::tryProcessNativeGifPackedChain(GS &gs, uint32_t tadr, uint32_t c
     m_ioRegisters[GIF_CHANNEL + 0x00u] = ((chcr & 0x0000FFFFu) | (tag.upper << 16u)) & ~0x100u;
     m_ioRegisters[GIF_CHANNEL + 0x20u] = 0u;
 
-    uint32_t dstat = m_ioRegisters.count(D_STAT) ? m_ioRegisters[D_STAT] : 0u;
-    dstat |= (1u << 2u);
-    const uint32_t status = dstat & 0x3FFu;
-    const uint32_t mask = (dstat >> 16u) & 0x3FFu;
-    if ((status & mask) != 0u)
-        dstat |= (1u << 31u);
-    else
-        dstat &= ~(1u << 31u);
-    m_ioRegisters[D_STAT] = dstat;
+    latchDmacStatus(2u);
     queueCompletedDmacCause(2u);
     return true;
 }

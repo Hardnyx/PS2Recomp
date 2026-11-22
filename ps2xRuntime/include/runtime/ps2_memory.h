@@ -350,7 +350,7 @@ public:
     uint32_t processVIF1DataImpl(const uint8_t *data, uint32_t sizeBytes,
                                  bool overrideFirstIrq, bool firstIrq);
     void processPendingTransfers();
-    std::vector<uint32_t> consumeCompletedDmacCauses();
+    std::vector<uint32_t> consumeCompletedDmacCauses(bool consumeMfifoEmpty = true);
 
     int pollDmaRegisters();
 
@@ -466,6 +466,8 @@ public:
     std::vector<PendingTransfer> m_pendingVif1Transfers;
     std::mutex m_completedDmacMutex;
     std::vector<uint32_t> m_completedDmacCauses;
+    bool m_mfifoEmptyQueued = false;
+    bool m_mfifoEmptyDelivered = false;
 
     struct CodeRegion
     {
@@ -507,6 +509,8 @@ public:
     } m_mfifoVif1{};
     bool tryProcessMfifoVif1(uint32_t channelBase, uint32_t chcr, bool restart);
     bool tryProcessScratchpadDma(uint32_t channelBase, uint32_t chcr);
+    void updateDmacStatus(uint32_t value);
+    void latchDmacStatus(uint32_t cause);
     void completeDmacChannel(uint32_t channelBase, uint32_t cause);
     void queueCompletedDmacCause(uint32_t cause);
 };

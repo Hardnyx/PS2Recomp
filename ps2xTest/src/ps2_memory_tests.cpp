@@ -11,6 +11,7 @@
 #include <cstdint>
 #include <cstring>
 #include <vector>
+#include <stdexcept>
 
 namespace
 {
@@ -155,8 +156,11 @@ namespace
 
 }
 
+void register_ps2_mfifo_empty_tests();
+
 void register_ps2_memory_tests()
 {
+    register_ps2_mfifo_empty_tests();
     MiniTest::Case("PS2Memory", [](TestCase &tc)
     {
         tc.Run("uncached aliases map to same RDRAM bytes", [](TestCase &t)
@@ -3987,6 +3991,314 @@ void register_ps2_memory_tests()
 
             t.IsTrue(threwRead32, "unaligned read32 should throw");
             t.IsTrue(threwWrite64, "unaligned write64 should throw");
+        });
+    });
+}
+
+namespace
+{
+    constexpr uint32_t kMeisStat = 0x1000E010u;
+    constexpr uint32_t kMeis = 1u << 14u;
+    constexpr uint32_t kMeim = 1u << 30u;
+    constexpr uint32_t kInt1 = 1u << 31u;
+    constexpr uint32_t kMeisRing = 0x10000u;
+    constexpr uint32_t kMeisVif = 0x10009000u;
+    constexpr uint32_t kMeisSpr = 0x1000D000u;
+    constexpr uint32_t kMeisScratch = 0x70000000u;
+
+    void meisTrace(const char *phase, PS2Memory &memory)
+    {
+        std::cout << "[MEIS] " << phase << " D_STAT=0x" << std::hex
+                  << memory.read32(kMeisStat) << " VIF_CHCR=0x" << memory.read32(kMeisVif)
+                  << " TADR=0x" << memory.read32(kMeisVif + 0x30u)
+                  << " QWC=0x" << memory.read32(kMeisVif + 0x20u)
+                  << " STAT=0x" << memory.vif1_regs.stat << std::dec << '\n';
+    }
+
+    void meisWrite(PS2Memory &memory, uint32_t address, uint32_t value, uint32_t width)
+    {
+        const uint32_t before = memory.read32(kMeisStat);
+        if (width == 8u) memory.write8(address, static_cast<uint8_t>(value));
+        else if (width == 16u) memory.write16(address, static_cast<uint16_t>(value));
+        else memory.write32(address, value);
+        std::cout << "[DSTAT-WRITE] width=" << width << " address=0x" << std::hex
+                  << address << " value=0x" << value << " before=0x" << before
+                  << " after=0x" << memory.read32(kMeisStat) << std::dec << '\n';
+    }
+
+    void meisLatch(PS2Memory &memory, uint32_t cause)
+    {
+        const uint32_t before = memory.read32(kMeisStat);
+        memory.latchDmacStatus(cause);
+        std::cout << "[DSTAT-LATCH] cause=" << cause << " before=0x" << std::hex
+                  << before << " after=0x" << memory.read32(kMeisStat) << std::dec << '\n';
+    }
+
+    void meisSetup(PS2Memory &memory, bool start = true)
+    {
+        if (!memory.initialize())
+            throw std::runtime_error("MFIFO Empty fixture initialization failed");
+        memory.write32(0x1000E000u, 9u);
+        memory.write32(0x1000E040u, 0xF0u);
+        memory.write32(0x1000E050u, kMeisRing);
+        memory.write32(kMeisSpr + 0x10u, kMeisRing);
+        memory.write32(kMeisVif + 0x30u, kMeisRing);
+        if (start)
+            memory.write32(kMeisVif, 0x105u);
+    }
+
+    void meisProduce(PS2Memory &memory, uint32_t offset, uint32_t count)
+    {
+        memory.write32(kMeisSpr + 0x80u, offset);
+        memory.write32(kMeisSpr + 0x20u, count);
+        memory.write32(kMeisSpr, 0x100u);
+    }
+
+    size_t meisCount(const std::vector<uint32_t> &causes)
+    {
+        return static_cast<size_t>(std::count(causes.begin(), causes.end(), 14u));
+    }
+}
+
+void register_ps2_mfifo_empty_tests()
+{
+    MiniTest::Case("PS2MemoryMfifoEmpty", [](TestCase &tc)
+    {
+        tc.Run("MEIS W1C and MEIM W1T retain pending status and recompute INT1", [](TestCase &t)
+        {
+            PS2Memory memory;
+            t.IsTrue(memory.initialize(), "memory initializes");
+            meisLatch(memory, 14u);
+            meisTrace("masked-latch", memory);
+            t.Equals(memory.read32(kMeisStat), kMeis, "MEIS latches with MEIM disabled");
+            t.IsTrue(memory.consumeCompletedDmacCauses().empty(), "masked MEIS is not delivered");
+            meisWrite(memory, kMeisStat, kMeim, 32u);
+            meisTrace("late-MEIM-enable", memory);
+            t.Equals(memory.read32(kMeisStat), kMeis | kMeim | kInt1, "late MEIM asserts INT1");
+            t.Equals(meisCount(memory.consumeCompletedDmacCauses()), size_t(1), "late unmask queues cause 14");
+            meisWrite(memory, kMeisStat, kMeim, 32u);
+            meisTrace("MEIM-disable", memory);
+            t.Equals(memory.read32(kMeisStat), kMeis, "disabling MEIM retains MEIS and drops INT1");
+            meisWrite(memory, kMeisStat, kMeim | kInt1, 32u);
+            t.Equals(memory.read32(kMeisStat), kMeis | kMeim | kInt1, "INT1 writes have no independent effect");
+            t.IsTrue(memory.consumeCompletedDmacCauses().empty(), "same latched condition is not notified twice");
+            meisWrite(memory, kMeisStat, kMeis, 32u);
+            meisTrace("W1C-acknowledge", memory);
+            t.Equals(memory.read32(kMeisStat), kMeim, "acknowledgement drops MEIS and INT1, preserving MEIM");
+            meisWrite(memory, kMeisStat, kInt1, 32u);
+            t.Equals(memory.read32(kMeisStat), kMeim, "writing INT1 cannot assert the summary");
+        });
+
+        tc.Run("D_STAT summary covers channel stall empty and unmaskable bus error", [](TestCase &t)
+        {
+            for (const uint32_t status : {0u, 4u, 0x2000u, 0x4000u, 0x8000u, 0xE004u})
+            {
+                for (const uint32_t masks : {0u, 0x00040000u, 0x20000000u, 0x40000000u, 0x60040000u})
+                {
+                    PS2Memory memory;
+                    t.IsTrue(memory.initialize(), "summary fixture initializes");
+                    for (uint32_t bit = 0u; bit < 16u; ++bit)
+                        if ((status & (1u << bit)) != 0u)
+                            meisLatch(memory, bit);
+                    meisWrite(memory, kMeisStat, masks, 32u);
+                    const bool asserted = (status & 0x8000u) != 0u ||
+                        ((status & (masks >> 16u) & 0x63FFu) != 0u);
+                    t.Equals(memory.read32(kMeisStat), status | masks | (asserted ? kInt1 : 0u),
+                             "INT1 must combine CIS/CIM, SIS/SIM, MEIS/MEIM and BEIS");
+                    meisWrite(memory, kMeisStat, status, 32u);
+                    t.Equals(memory.read32(kMeisStat), masks, "all status fields support W1C");
+                }
+            }
+            PS2Memory memory;
+            t.IsTrue(memory.initialize(), "reserved-bit fixture initializes");
+            meisWrite(memory, kMeisStat, 0xFFFFFFFFu, 32u);
+            t.Equals(memory.read32(kMeisStat), 0x63FF0000u, "reserved bits and writable INT1 must not be stored");
+            meisWrite(memory, kMeisStat, 0xFFFFFFFFu, 32u);
+            t.Equals(memory.read32(kMeisStat), 0u, "only implemented masks toggle back off");
+        });
+
+        tc.Run("D_STAT narrow writes acknowledge and toggle only their strobes", [](TestCase &t)
+        {
+            PS2Memory memory;
+            t.IsTrue(memory.initialize(), "narrow-write fixture initializes");
+            for (uint32_t cause : {2u, 13u, 14u, 15u}) meisLatch(memory, cause);
+            meisWrite(memory, kMeisStat, 0x60040000u, 32u);
+            meisTrace("narrow-before", memory);
+            const uint32_t before = memory.read32(kMeisStat);
+            meisWrite(memory, kMeisStat, 0u, 8u);
+            t.Equals(memory.read32(kMeisStat), before, "byte zero does not acknowledge or toggle unrelated fields");
+            meisWrite(memory, kMeisStat + 1u, 0x40u, 8u);
+            t.Equals(memory.read32(kMeisStat), before & ~kMeis, "status byte acknowledges MEIS only");
+            meisWrite(memory, kMeisStat + 3u, 0x40u, 8u);
+            t.Equals(memory.read32(kMeisStat), (before & ~kMeis) ^ kMeim, "mask byte toggles MEIM only");
+            meisWrite(memory, kMeisStat + 2u, 0x2000u, 16u);
+            t.Equals(memory.read32(kMeisStat), 0x8004A004u, "high halfword toggles SIM without acknowledging status");
+            meisWrite(memory, kMeisStat, 0x8004u, 16u);
+            meisTrace("narrow-after", memory);
+            t.Equals(memory.read32(kMeisStat), 0x00042000u, "low halfword clears BEIS/CIS without toggling masks");
+        });
+
+        tc.Run("MEIS deferred queue coalesces masks SDK deferral and W1C cancellation", [](TestCase &t)
+        {
+            PS2Memory memory;
+            t.IsTrue(memory.initialize(), "deferred fixture initializes");
+            meisLatch(memory, 14u);
+            meisWrite(memory, kMeisStat, kMeim, 32u);
+            t.IsTrue(memory.consumeCompletedDmacCauses(false).empty(), "caller may defer cause 14 without losing it");
+            meisWrite(memory, kMeisStat, kMeim, 32u);
+            t.IsTrue(memory.consumeCompletedDmacCauses().empty(), "hardware mask disabled before drain defers delivery");
+            meisWrite(memory, kMeisStat, kMeim, 32u);
+            t.Equals(meisCount(memory.consumeCompletedDmacCauses()), size_t(1), "unmask delivers the retained occurrence once");
+            for (int i = 0; i < 3; ++i) meisLatch(memory, 14u);
+            t.IsTrue(memory.consumeCompletedDmacCauses().empty(), "repeated empty polls do not duplicate notification");
+            meisWrite(memory, kMeisStat, kMeis, 32u);
+            meisLatch(memory, 14u);
+            t.Equals(meisCount(memory.consumeCompletedDmacCauses()), size_t(1), "a new event after W1C delivers again");
+            meisWrite(memory, kMeisStat, kMeis, 32u);
+            meisLatch(memory, 14u);
+            meisWrite(memory, kMeisStat, kMeis, 32u);
+            t.IsTrue(memory.consumeCompletedDmacCauses().empty(), "W1C cancels an occurrence before its deferred drain");
+        });
+
+        tc.Run("MFIFO tag empty latches MEIS clears FQC and preserves STR TADR", [](TestCase &t)
+        {
+            PS2Memory memory;
+            meisSetup(memory, false);
+            memory.vif1_regs.stat |= 0x1F000000u;
+            meisWrite(memory, kMeisVif, 0x105u, 32u);
+            meisTrace("tag-empty", memory);
+            t.Equals(memory.read32(kMeisStat), kMeis, "an empty tag fetch latches masked MEIS only");
+            t.Equals(memory.vif1_regs.stat & 0x1F000000u, 0u, "FQC is zero when MFIFO is empty");
+            t.Equals(memory.read32(kMeisVif + 0x30u), kMeisRing, "empty ring preserves TADR");
+            t.IsTrue((memory.read32(kMeisVif) & 0x100u) != 0u, "empty ring preserves STR");
+            t.IsFalse(memory.m_mfifoVif1.pending, "an unwritten tag is not accepted");
+            meisWrite(memory, kMeisStat, kMeim, 32u);
+            t.Equals(meisCount(memory.consumeCompletedDmacCauses()), size_t(1), "late MEIM delivers the pending empty event");
+            memory.tryProcessMfifoVif1(kMeisVif, memory.read32(kMeisVif), false);
+            t.IsTrue(memory.consumeCompletedDmacCauses().empty(), "repeated empty fetch does not complete or notify twice");
+        });
+
+        tc.Run("MFIFO payload empty preserves remaining QWC and resumes after producer", [](TestCase &t)
+        {
+            PS2Memory memory;
+            meisSetup(memory);
+            meisWrite(memory, kMeisStat, kMeis | kMeim, 32u);
+            memory.write64(kMeisScratch, makeDmaTag(2u, 1u, 0u));
+            meisWrite(memory, kMeisScratch + 16u, 0x07001111u, 32u);
+            meisWrite(memory, kMeisScratch + 32u, 0x07002222u, 32u);
+            memory.vif1_regs.stat |= 0x1F000000u;
+            meisProduce(memory, 0u, 2u);
+            meisTrace("payload-empty", memory);
+            t.IsTrue((memory.read32(kMeisStat) & (kMeis | kInt1)) == (kMeis | kInt1), "payload exhaustion asserts MEIS/INT1");
+            t.Equals(memory.read32(kMeisVif + 0x30u), kMeisRing + 32u, "consumer cursor identifies the missing payload");
+            t.Equals(memory.read32(kMeisVif + 0x20u), 1u, "one payload quadword remains");
+            t.IsTrue(memory.m_mfifoVif1.pending && memory.m_mfifoVif1.remaining == 1u, "pending consumer state is retained");
+            t.Equals(memory.vif1_regs.mark, 0x1111u, "only written payload executes");
+            t.Equals(memory.vif1_regs.stat & 0x1F000000u, 0u, "payload exhaustion clears FQC");
+            t.Equals(meisCount(memory.consumeCompletedDmacCauses()), size_t(1), "payload exhaustion notifies once");
+            meisWrite(memory, kMeisStat, kMeis, 32u);
+            meisProduce(memory, 32u, 1u);
+            meisTrace("payload-resumed", memory);
+            t.Equals(memory.vif1_regs.mark, 0x2222u, "producer resumes the retained payload");
+            t.Equals(memory.read32(kMeisVif + 0x20u), 0u, "resumed payload drains QWC");
+            t.IsTrue((memory.read32(kMeisVif) & 0x100u) != 0u, "CNT still waits for the following tag");
+            t.Equals(meisCount(memory.consumeCompletedDmacCauses()), size_t(1), "new exhaustion after W1C is deliverable");
+        });
+
+        tc.Run("MFIFO external REF REFE REFS latch empty before nonzero external payload", [](TestCase &t)
+        {
+            for (uint8_t id : {uint8_t(0), uint8_t(3), uint8_t(4)})
+            {
+                PS2Memory memory;
+                meisSetup(memory);
+                meisWrite(memory, kMeisStat, kMeis | kMeim, 32u);
+                bool called = false;
+                uint32_t duringStatus = 0u, duringQwc = 0u;
+                memory.setVu1MscalCallback([&](uint32_t, uint32_t, uint32_t)
+                {
+                    called = true;
+                    duringStatus = memory.read32(kMeisStat);
+                    duringQwc = memory.read32(kMeisVif + 0x20u);
+                    meisTrace("external-payload-callback", memory);
+                });
+                meisWrite(memory, 0x20000u, 0x14000000u, 32u);
+                meisWrite(memory, 0x20004u, 0x07003333u, 32u);
+                memory.write64(kMeisScratch, makeDmaTag(1u, id, 0x20000u));
+                meisProduce(memory, 0u, 1u);
+                t.IsTrue(called && duringQwc == 1u, "MFIFO Empty must not stall external data");
+                t.IsTrue((duringStatus & (kMeis | kInt1)) == (kMeis | kInt1), "MEIS is visible before external data executes");
+                t.Equals(memory.vif1_regs.mark, 0x3333u, "external payload completes normally");
+                t.Equals(memory.read32(kMeisVif + 0x20u), 0u, "external QWC drains despite empty ring");
+                t.Equals((memory.read32(kMeisVif) & 0x100u) != 0u, id != 0u, "only REFE terminates the chain");
+                t.Equals(meisCount(memory.consumeCompletedDmacCauses()), size_t(1), "REF-family exhaustion coalesces cause 14");
+            }
+        });
+
+        tc.Run("MFIFO END raises empty while completing VIF1 exactly once", [](TestCase &t)
+        {
+            PS2Memory memory;
+            meisSetup(memory);
+            meisWrite(memory, kMeisStat, kMeis | kMeim, 32u);
+            memory.write64(kMeisScratch, makeDmaTag(0u, 7u, 0u));
+            meisProduce(memory, 0u, 1u);
+            meisTrace("END-empty-complete", memory);
+            t.IsTrue((memory.read32(kMeisStat) & (kMeis | kInt1 | 2u)) == (kMeis | kInt1 | 2u), "END can latch empty and channel completion together");
+            t.IsTrue((memory.read32(kMeisVif) & 0x100u) == 0u, "END clears STR");
+            const auto causes = memory.consumeCompletedDmacCauses();
+            t.Equals(meisCount(causes), size_t(1), "END queues cause 14 once");
+            t.Equals(std::count(causes.begin(), causes.end(), 1u), ptrdiff_t(1), "END completes channel 1 once");
+            meisWrite(memory, kMeisStat, kMeis, 32u);
+            meisProduce(memory, 16u, 1u);
+            t.IsTrue((memory.read32(kMeisStat) & kMeis) == 0u, "inactive consumer does not raise empty on producer writes");
+        });
+
+        tc.Run("MFIFO with available data and non MFIFO VIF1 do not raise empty", [](TestCase &t)
+        {
+            for (bool configured : {false, true})
+            {
+                PS2Memory memory;
+                meisSetup(memory, false);
+                meisWrite(memory, 0x1000E000u, configured ? 9u : 1u, 32u);
+                memory.write64(kMeisRing, makeDmaTag(0u, 7u, 0u));
+                meisWrite(memory, kMeisSpr + 0x10u, kMeisRing + 32u, 32u);
+                memory.vif1_regs.stat |= 0x1F000000u;
+                meisWrite(memory, kMeisVif, 0x105u, 32u);
+                t.IsTrue((memory.read32(kMeisStat) & kMeis) == 0u, "empty is not reported when data remains or MFIFO is disabled");
+                t.Equals(memory.vif1_regs.stat & 0x1F000000u, 0x1F000000u, "nonempty path does not clear FQC as an empty event");
+                t.Equals(meisCount(memory.consumeCompletedDmacCauses()), size_t(0), "no spurious cause 14 is queued");
+            }
+        });
+
+        tc.Run("D_STAT central summary survives SPR queued VIF and native GIF completions", [](TestCase &t)
+        {
+            PS2Memory memory;
+            t.IsTrue(memory.initialize(), "completion fixture initializes");
+            meisLatch(memory, 14u);
+            meisWrite(memory, kMeisStat, kMeim, 32u);
+            memory.completeDmacChannel(kMeisSpr, 8u);
+            t.IsTrue((memory.read32(kMeisStat) & kInt1) != 0u, "SPR completion preserves MEIS summary");
+            meisWrite(memory, 0x20000u, 0x07004444u, 32u);
+            meisWrite(memory, 0x10008010u, 0x20000u, 32u);
+            meisWrite(memory, 0x10008020u, 1u, 32u);
+            meisWrite(memory, 0x10008000u, 0x100u, 32u);
+            memory.processPendingTransfers();
+            t.IsTrue((memory.read32(kMeisStat) & kInt1) != 0u, "queued VIF completion preserves MEIS summary");
+            GS gs;
+            gs.init(memory.getGSVRAM(), PS2_GS_VRAM_SIZE, &memory.gs());
+            uint8_t *ram = memory.getRDRAM();
+            uint32_t end = writeTextureUploadSetup(ram, 0x28000u, 0u, GS_PSM_CT32);
+            end = writeTextureImageRef(ram, end, 1u, 0x29000u);
+            writeDmaTag(ram, end, makeDmaTag(0u, 7u, 0u));
+            t.IsTrue(memory.tryProcessNativeGifImageUploadChain(gs, 0x28000u, 0x105u), "native image completion executes");
+            t.IsTrue((memory.read32(kMeisStat) & kInt1) != 0u, "native image completion preserves MEIS summary");
+            writeDmaTag(ram, 0x2A000u, makeDmaTag(2u, 7u, 0u));
+            writeU64(ram, 0x2A010u, makeGifTag(1u, GIF_FMT_PACKED, 1u));
+            writeU64(ram, 0x2A018u, 0xEull);
+            writeU64(ram, 0x2A020u, 1ull << 16u);
+            writeU64(ram, 0x2A028u, GS_REG_FRAME_1);
+            t.IsTrue(memory.tryProcessNativeGifPackedChain(gs, 0x2A000u, 0x105u), "native packed completion executes");
+            t.IsTrue((memory.read32(kMeisStat) & kInt1) != 0u, "native packed completion preserves MEIS summary");
+            t.Equals(meisCount(memory.consumeCompletedDmacCauses()), size_t(1), "unrelated completions do not duplicate cause 14");
         });
     });
 }
