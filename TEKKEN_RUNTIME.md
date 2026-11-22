@@ -30,6 +30,21 @@ validation before the port changes its declared source pin.
 
 ## Scope and integration
 
+### Local Windows validation, 21 November 2026
+
+MSVC x64 19.51.36248 built the ordinary Release component suite at
+`9f5083b` with the existing local dependency sources, FFmpeg and debug UI
+disabled, and no KZVU reference backend. The result was 511/512 tests passed.
+The failing case is `latched host presentation reads preferred CT32 source
+with GS swizzle` in `ps2xTest/src/ps2_gs_tests.cpp`; both preferred-source
+image checks fail. This run does not validate the optional KZVU configuration
+or a Tekken scene. Preserve this failure when assessing source promotion.
+
+The Windows PowerShell 5.1 selector regression passes. Local checking now
+resolves its default root after script initialization and configures NMake
+with an explicit Release build type. No hosted workflow was started, and
+TekkenTagPort's dependency pin was not changed.
+
 This fork maintains reusable recompiler and runtime corrections needed by
 TekkenTagPort. The game's EE still runs as statically recompiled native code.
 Game-specific integration, generated function bindings, source patch layering,
