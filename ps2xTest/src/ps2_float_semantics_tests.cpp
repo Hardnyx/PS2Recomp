@@ -264,6 +264,61 @@ void register_ps2_float_semantics_tests()
                      "SQRT.S must read ft even when fd aliases ft, but got: " + sqrt);
         });
 
+        tc.Run("CVT.W.S truncates and saturates with PS2 hardware result bits", [](TestCase &t)
+        {
+            // Result pairs from unknownbrackets/ps2autotests, tests/cpu/ee_fpu/convert.expected.
+            constexpr uint32_t cases[][2] = {
+                {0x00000000u, 0x00000000u}, {0x80000000u, 0x00000000u},
+                {0x00000005u, 0x00000000u}, {0x3fbeb852u, 0x00000001u},
+                {0x3fc00000u, 0x00000001u}, {0x3fc147aeu, 0x00000001u},
+                {0xbfbeb852u, 0xffffffffu}, {0xbfc00000u, 0xffffffffu},
+                {0xbfc147aeu, 0xffffffffu}, {0x4effffffu, 0x7fffff80u},
+                {0xceffffffu, 0x80000080u}, {0x4f000000u, 0x7fffffffu},
+                {0xcf000000u, 0x80000000u}, {0x7f800000u, 0x7fffffffu},
+                {0xff800000u, 0x80000000u}, {0x7fffffffu, 0x7fffffffu},
+                {0xffffffffu, 0x80000000u},
+            };
+            for (const auto &entry : cases)
+                t.Equals(static_cast<uint32_t>(FPU_CVT_W_S(floatOf(entry[0]))), entry[1],
+                         "CVT.W.S hardware input bits: " + std::to_string(entry[0]));
+
+            CodeGenerator gen({}, {});
+            const auto translated = gen.translateInstruction(makeCop1S(COP1_S_CVT_W, 2, 3, 0));
+            t.IsTrue(translated.find("FPU_CVT_W_S(ctx->f[3])") != std::string::npos, translated);
+        });
+
+        tc.Run("VU0 VADD preserves PS2 alignment, signed zero and exponent range", [](TestCase &t)
+        {
+            const __m128 a = _mm_set_ps(floatOf(0x00800001u), floatOf(0x80000001u),
+                                          floatOf(0x7f800000u), 1.0f);
+            const __m128 b = _mm_set_ps(floatOf(0x80800000u), floatOf(0x80000000u),
+                                          floatOf(0x7f800000u), floatOf(0xbe800001u));
+            const __m128 sum = PS2_VADD_EXACT(a, b);
+            t.Equals(laneBits(sum, 0), 0x3f400000u, "the exponent alignment drops the smaller operand's low bit");
+            t.Equals(laneBits(sum, 1), kPlusMax, "adds exponent-255 operands as finite values and saturates");
+            t.Equals(laneBits(sum, 2), 0x80000000u, "two negative zero operands produce negative zero");
+            t.Equals(laneBits(sum, 3), 0x00000000u, "flushes a positive underflow to zero");
+        });
+
+        tc.Run("VU0 emits exact standalone additions", [](TestCase &t)
+        {
+            CodeGenerator gen({}, {});
+            Instruction inst{};
+            inst.rd = 1;
+            inst.rt = 2;
+            inst.sa = 3;
+            for (const auto &translation : {
+                     gen.translateVU_VADD(inst), gen.translateVU_VADD_Field(inst),
+                     gen.translateVU_VADDi(inst), gen.translateVU_VADDq(inst),
+                     gen.translateVU_VADDA(inst), gen.translateVU_VADDA_Field(inst),
+                     gen.translateVU_VADDAi(inst), gen.translateVU_VADDAq(inst)})
+                t.IsTrue(translation.find("PS2_VADD_EXACT(") != std::string::npos, translation);
+
+            for (const auto &translation : {
+                     gen.translateVU_VMADD(inst), gen.translateVU_VMADDA(inst)})
+                t.IsTrue(translation.find("PS2_VADD(") != std::string::npos, translation);
+        });
+
         tc.Run("DIV.S and RSQRT.S translate to the PS2 semantics helpers", [](TestCase &t)
         {
             CodeGenerator gen({}, {});
