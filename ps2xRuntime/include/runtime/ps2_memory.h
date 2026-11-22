@@ -492,6 +492,20 @@ public:
     };
 
     std::array<EeTimer, 4> m_eeTimers{};
+    // MFIFO progress survives empty rings, partial payloads and VIF1 I-bit stalls.
+    struct MfifoVif1State
+    {
+        bool pending = false;
+        bool ringPayload = false;
+        bool end = false;
+        uint32_t remaining = 0u;
+        uint32_t dataAddr = 0u;
+        uint32_t nextTag = 0u;
+        uint32_t payloadOffset = 0u;
+        uint64_t tagData = 0u;
+        uint32_t tagBytes = 0u;
+    } m_mfifoVif1{};
+    bool tryProcessMfifoVif1(uint32_t channelBase, uint32_t chcr, bool restart);
     bool tryProcessScratchpadDma(uint32_t channelBase, uint32_t chcr);
     void completeDmacChannel(uint32_t channelBase, uint32_t cause);
     void queueCompletedDmacCause(uint32_t cause);

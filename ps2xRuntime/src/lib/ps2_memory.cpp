@@ -325,6 +325,7 @@ bool PS2Memory::initialize(size_t ramSize)
     };
 
     cleanup();
+    m_mfifoVif1 = {};
     m_seenGifCopy = false;
     m_dmaStartCount.store(0, std::memory_order_relaxed);
     m_gifCopyCount.store(0, std::memory_order_relaxed);
@@ -1340,6 +1341,8 @@ bool PS2Memory::writeIORegister(uint32_t address, uint32_t value)
                 // The resumed drain may pause again on another I-bit command.
                 if (pausedDma && !m_pendingVif1Transfers.empty())
                     processPendingTransfers();
+                if (pausedDma && (m_ioRegisters[0x10009000u] & 0x100u) != 0u)
+                    tryProcessMfifoVif1(0x10009000u, m_ioRegisters[0x10009000u], false);
             }
             break;
         case 0x10003C20u: // VIF1_ERR: MII, ME0, ME1
@@ -1410,6 +1413,9 @@ bool PS2Memory::writeIORegister(uint32_t address, uint32_t value)
             const uint32_t madr = m_ioRegisters[channelBase + 0x10];
             const uint32_t qwc = m_ioRegisters[channelBase + 0x20];
             m_dmaStartCount.fetch_add(1, std::memory_order_relaxed);
+
+            if (tryProcessMfifoVif1(channelBase, value, true))
+                return true;
 
             if (tryProcessScratchpadDma(channelBase, value))
             {
@@ -1695,60 +1701,56 @@ bool PS2Memory::writeIORegister(uint32_t address, uint32_t value)
 
 bool PS2Memory::tryProcessScratchpadDma(uint32_t channelBase, uint32_t chcr)
 {
-    static constexpr uint32_t kSprFromChannel = 0x1000D000u;
-    static constexpr uint32_t kSprToChannel = 0x1000D400u;
-    if (channelBase != kSprFromChannel && channelBase != kSprToChannel)
+    // TEKKEN_MFIFO_SPR_V1: wrap the producer and wake the VIF1 consumer.
+    if (channelBase != 0x1000D000u && channelBase != 0x1000D400u)
         return false;
-
-    const uint32_t mode = (chcr >> 2u) & 0x3u;
-    if (mode != 0u)
+    if (((chcr >> 2u) & 3u) != 0u)
         return false;
-
-    const uint32_t qwc = m_ioRegisters[channelBase + 0x20u] & 0xFFFFu;
-    const uint32_t byteCount = qwc * 16u;
+    const bool fromScratchpad = channelBase == 0x1000D000u;
+    const uint32_t byteCount = (m_ioRegisters[channelBase + 0x20u] & 0xFFFFu) * 16u;
     const uint32_t originalMadr = m_ioRegisters[channelBase + 0x10u] & 0x7FFFFFF0u;
     const uint32_t originalSadr = m_ioRegisters[channelBase + 0x80u] & 0x3FF0u;
-
     uint32_t mainOffset = 0u;
-    try
+    try { mainOffset = translateAddress(originalMadr); }
+    catch (const std::exception &) { return false; }
+    const bool selectedMfifo = fromScratchpad && ((m_ioRegisters[0x1000E000u] >> 2u) & 3u) == 2u;
+    const uint32_t ringBase = m_ioRegisters[0x1000E050u] & 0x7FFFFFF0u;
+    const uint32_t ringSize = (m_ioRegisters[0x1000E040u] & 0x7FFFFFF0u) + 16u;
+    const bool mfifo = selectedMfifo && mainOffset >= ringBase && uint64_t(mainOffset) < uint64_t(ringBase) + ringSize;
+    if (mfifo)
     {
-        mainOffset = translateAddress(originalMadr);
+        if ((ringSize & (ringSize - 1u)) != 0u || ringBase >= PS2_RAM_SIZE ||
+            ringSize > PS2_RAM_SIZE - ringBase || mainOffset < ringBase || mainOffset >= ringBase + ringSize)
+            throw std::runtime_error("Invalid scratchpad MFIFO producer range");
     }
-    catch (const std::exception &)
-    {
+    else if (mainOffset > PS2_RAM_SIZE || byteCount > PS2_RAM_SIZE - mainOffset)
         return false;
-    }
-
-    if (mainOffset > PS2_RAM_SIZE || byteCount > PS2_RAM_SIZE - mainOffset)
-        return false;
-
-    const bool fromScratchpad = channelBase == kSprFromChannel;
     uint32_t scratchOffset = originalSadr;
     uint32_t bytesLeft = byteCount;
-    uint32_t copied = 0u;
     while (bytesLeft != 0u)
     {
-        const uint32_t scratchChunk = PS2_SCRATCHPAD_SIZE - scratchOffset;
-        const uint32_t chunk = std::min(bytesLeft, scratchChunk);
+        uint32_t chunk = std::min(bytesLeft, PS2_SCRATCHPAD_SIZE - scratchOffset);
+        if (mfifo)
+            chunk = std::min(chunk, ringBase + ringSize - mainOffset);
         if (fromScratchpad)
         {
-            std::memcpy(m_rdram + mainOffset + copied, m_scratchpad + scratchOffset, chunk);
-            markModified(mainOffset + copied, chunk);
+            std::memcpy(m_rdram + mainOffset, m_scratchpad + scratchOffset, chunk);
+            markModified(mainOffset, chunk);
         }
         else
-        {
-            std::memcpy(m_scratchpad + scratchOffset, m_rdram + mainOffset + copied, chunk);
-        }
-
-        copied += chunk;
-        bytesLeft -= chunk;
+            std::memcpy(m_scratchpad + scratchOffset, m_rdram + mainOffset, chunk);
+        mainOffset += chunk;
+        if (mfifo)
+            mainOffset = ringBase + ((mainOffset - ringBase) & (ringSize - 1u));
         scratchOffset = (scratchOffset + chunk) & (PS2_SCRATCHPAD_SIZE - 1u);
+        bytesLeft -= chunk;
     }
-
-    m_ioRegisters[channelBase + 0x10u] = (originalMadr + byteCount) & 0x7FFFFFF0u;
+    m_ioRegisters[channelBase + 0x10u] = mfifo ? mainOffset : (originalMadr + byteCount) & 0x7FFFFFF0u;
     m_ioRegisters[channelBase + 0x20u] = 0u;
-    m_ioRegisters[channelBase + 0x80u] = (originalSadr + byteCount) & 0x3FF0u;
+    m_ioRegisters[channelBase + 0x80u] = scratchOffset & 0x3FF0u;
     completeDmacChannel(channelBase, fromScratchpad ? 8u : 9u);
+    if (mfifo && byteCount != 0u && (m_ioRegisters[0x10009000u] & 0x100u) != 0u)
+        tryProcessMfifoVif1(0x10009000u, m_ioRegisters[0x10009000u], false);
     return true;
 }
 
@@ -2517,7 +2519,10 @@ uint32_t PS2Memory::readIORegister(uint32_t address)
                 // behind an I-bit stall; do not manufacture completion.
                 if (address == 0x10009000u && !m_pendingVif1Transfers.empty())
                     return m_ioRegisters[address];
-                uint32_t channelStatus = m_ioRegisters[address] & ~0x100u;
+                const bool mfifoVif1 = address == 0x10009000u &&
+                    ((m_ioRegisters[0x1000E000u] >> 2u) & 3u) == 2u;
+                uint32_t channelStatus = mfifoVif1 ? m_ioRegisters[address]
+                    : (m_ioRegisters[address] & ~0x100u);
                 m_ioRegisters[address] = channelStatus;
                 return channelStatus;
             }
@@ -2698,3 +2703,5 @@ void PS2Memory::clearModifiedFlag(uint32_t address, uint32_t size)
         }
     }
 }
+
+#include "tekken_mfifo_vif1.inc"
