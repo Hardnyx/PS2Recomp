@@ -1720,7 +1720,9 @@ bool PS2Memory::tryProcessScratchpadDma(uint32_t channelBase, uint32_t chcr)
     uint32_t mainOffset = 0u;
     try { mainOffset = translateAddress(originalMadr); }
     catch (const std::exception &) { return false; }
-    const bool selectedMfifo = fromScratchpad && ((m_ioRegisters[0x1000E000u] >> 2u) & 3u) == 2u;
+    const auto dctrlIt = m_ioRegisters.find(0x1000E000u);
+    const bool selectedMfifo = fromScratchpad && dctrlIt != m_ioRegisters.end() &&
+        ((dctrlIt->second >> 2u) & 3u) == 2u;
     const uint32_t ringBase = m_ioRegisters[0x1000E050u] & 0x7FFFFFF0u;
     const uint32_t ringSize = (m_ioRegisters[0x1000E040u] & 0x7FFFFFF0u) + 16u;
     const bool mfifo = selectedMfifo && mainOffset >= ringBase && uint64_t(mainOffset) < uint64_t(ringBase) + ringSize;
@@ -2540,8 +2542,10 @@ uint32_t PS2Memory::readIORegister(uint32_t address)
                 // behind an I-bit stall; do not manufacture completion.
                 if (address == 0x10009000u && !m_pendingVif1Transfers.empty())
                     return m_ioRegisters[address];
+                const auto dctrlIt = m_ioRegisters.find(0x1000E000u);
                 const bool mfifoVif1 = address == 0x10009000u &&
-                    ((m_ioRegisters[0x1000E000u] >> 2u) & 3u) == 2u;
+                    dctrlIt != m_ioRegisters.end() &&
+                    ((dctrlIt->second >> 2u) & 3u) == 2u;
                 uint32_t channelStatus = mfifoVif1 ? m_ioRegisters[address]
                     : (m_ioRegisters[address] & ~0x100u);
                 m_ioRegisters[address] = channelStatus;

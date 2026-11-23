@@ -1,8 +1,10 @@
 // Streaming VIF1 MFIFO consumer, adapted from the port's reversible runtime patch.
 bool PS2Memory::tryProcessMfifoVif1(uint32_t channelBase, uint32_t chcr, bool restart)
 {
-    if (channelBase != 0x10009000u || ((chcr >> 2u) & 3u) != 1u ||
-        ((m_ioRegisters[0x1000E000u] >> 2u) & 3u) != 2u)
+    if (channelBase != 0x10009000u || ((chcr >> 2u) & 3u) != 1u)
+        return false;
+    const auto dctrlIt = m_ioRegisters.find(0x1000E000u);
+    if (dctrlIt == m_ioRegisters.end() || ((dctrlIt->second >> 2u) & 3u) != 2u)
         return false;
     const uint32_t base = m_ioRegisters[0x1000E050u] & 0x7FFFFFF0u;
     const uint32_t size = (m_ioRegisters[0x1000E040u] & 0x7FFFFFF0u) + 16u;

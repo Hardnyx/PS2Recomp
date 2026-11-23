@@ -163,6 +163,51 @@ void register_ps2_memory_tests()
     register_ps2_mfifo_empty_tests();
     MiniTest::Case("PS2Memory", [](TestCase &tc)
     {
+        tc.Run("VIF1 observers must not disable an unconfigured DMA controller", [](TestCase &t)
+        {
+            PS2Memory mem;
+            t.IsTrue(mem.initialize(), "VIF1 observer fixture should initialize");
+            constexpr uint32_t kDctrl = 0x1000E000u;
+            constexpr uint32_t kDstat = 0x1000E010u;
+            constexpr uint32_t kVif1Ch = 0x10009000u;
+            constexpr uint32_t kSource = 0x0002C000u;
+            std::memset(mem.getRDRAM() + kSource, 0, 16u); // Four NOP commands.
+
+            // An implicit DMAE default is not an explicit guest write.
+            // Reading CHCR must not create a disabled controller.
+            t.Equals(mem.readIORegister(kDctrl), 0u,
+                     "the guest-visible D_CTRL reset read must stay unchanged");
+            (void)mem.readIORegister(kVif1Ch);
+            t.Equals(mem.readIORegister(kDctrl), 0u,
+                     "observing CHCR must not insert an all-zero D_CTRL");
+
+            for (unsigned iteration = 0u; iteration < 2u; ++iteration)
+            {
+                mem.writeIORegister(kVif1Ch + 0x10u, kSource);
+                mem.writeIORegister(kVif1Ch + 0x20u, 1u);
+                mem.writeIORegister(kVif1Ch, 0x100u);
+                t.Equals(mem.readIORegister(kVif1Ch + 0x20u), 0u,
+                         "the VIF1 transfer must finish after MFIFO detection");
+                t.Equals(mem.readIORegister(kDctrl), 0u,
+                         "MFIFO detection must preserve an absent D_CTRL");
+                t.IsTrue((mem.readIORegister(kDstat) & 2u) != 0u,
+                         "the VIF1 completion must be latched");
+                t.Equals(mem.consumeCompletedDmacCauses().size(), size_t{1u},
+                         "each transfer must deliver exactly one completion");
+                mem.write32(kDstat, 2u);
+            }
+
+            mem.writeIORegister(kDctrl, 0u);
+            mem.writeIORegister(kVif1Ch + 0x20u, 1u);
+            mem.writeIORegister(kVif1Ch, 0x100u);
+            t.Equals(mem.readIORegister(kVif1Ch + 0x20u), 1u,
+                     "explicit DMAE=0 must block the transfer");
+            mem.writeIORegister(kDctrl, 1u);
+            mem.writeIORegister(kVif1Ch, 0x100u);
+            t.Equals(mem.readIORegister(kVif1Ch + 0x20u), 0u,
+                     "explicit DMAE=1 must permit the transfer");
+        });
+
         tc.Run("uncached aliases map to same RDRAM bytes", [](TestCase &t)
         {
             PS2Memory mem;
