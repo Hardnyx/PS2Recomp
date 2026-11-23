@@ -1,5 +1,7 @@
 // Based on Blackline Interactive implementation
 #include "runtime/ps2_memory.h"
+#include <algorithm>
+#include <cstdint>
 #include <cstring>
 
 enum VIFCmd : uint8_t
@@ -860,6 +862,66 @@ uint32_t PS2Memory::processVIF1DataImpl(const uint8_t *data, uint32_t sizeBytes,
             if (m_vu1Data && totalBytes > 0u)
             {
                 const uint8_t *srcBase = data + pos;
+#if defined(PS2X_ENABLE_VIF1_CONTIGUOUS_UNPACK)
+                // Contiguous, unmasked MODE=0/3 UNPACK replaces each written
+                // lane. Preserve the original decoder for fill/skip cycles,
+                // row updates and buffers aliasing VU1 data memory.
+                const uint32_t unpackMode = vif1_regs.mode & 3u;
+                const uintptr_t sourceBegin = reinterpret_cast<uintptr_t>(srcBase);
+                const uintptr_t vuBegin = reinterpret_cast<uintptr_t>(m_vu1Data);
+                const bool sourceAliasesVu =
+                    sourceBegin < vuBegin + PS2_VU1_DATA_SIZE &&
+                    vuBegin < sourceBegin + totalBytes;
+                if (!maskEnable && (unpackMode == 0u || unpackMode == 3u) &&
+                    cl == wl && !sourceAliasesVu &&
+                    (vl == 0u || (vn == 3u && vl == 2u)))
+                {
+                    uint32_t destOff = vuAddr * 16u;
+                    if (vn == 3u && vl == 0u)
+                    {
+                        const uint32_t first = std::min(totalBytes, PS2_VU1_DATA_SIZE - destOff);
+                        std::memcpy(m_vu1Data + destOff, srcBase, first);
+                        if (totalBytes > first)
+                            std::memcpy(m_vu1Data, srcBase + first, totalBytes - first);
+                    }
+                    else
+                    {
+                        for (uint32_t index = 0u; index < writeVectorCount; ++index)
+                        {
+                            uint32_t lanes[4]{};
+                            const uint8_t *source = srcBase + index * bytesPerVector;
+                            if (vl == 2u)
+                            {
+                                for (uint32_t lane = 0u; lane < 4u; ++lane)
+                                    lanes[lane] = zeroExtend ? uint32_t(source[lane])
+                                        : uint32_t(int32_t(int8_t(source[lane])));
+                            }
+                            else if (vn == 0u)
+                            {
+                                std::memcpy(&lanes[0], source, 4u);
+                                lanes[1] = lanes[2] = lanes[3] = lanes[0];
+                            }
+                            else if (vn == 1u)
+                            {
+                                std::memcpy(lanes, source, 8u);
+                                lanes[2] = lanes[0];
+                                lanes[3] = lanes[1];
+                            }
+                            else
+                            {
+                                std::memcpy(lanes, source, 12u);
+                                const uint32_t extra = uint32_t(source - data) + 12u;
+                                if (extra <= sizeBytes && 4u <= sizeBytes - extra)
+                                    std::memcpy(&lanes[3], data + extra, 4u);
+                            }
+                            std::memcpy(m_vu1Data + destOff, lanes, sizeof(lanes));
+                            destOff = (destOff + 16u) & (PS2_VU1_DATA_SIZE - 1u);
+                        }
+                    }
+                    pos += totalBytes;
+                    continue;
+                }
+#endif
                 uint32_t srcIndex = 0u;
                 for (uint32_t writeIndex = 0; writeIndex < writeVectorCount; ++writeIndex)
                 {

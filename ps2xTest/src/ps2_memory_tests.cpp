@@ -158,8 +158,64 @@ namespace
 
 void register_ps2_mfifo_empty_tests();
 
+void register_vif1_contiguous_unpack_tests()
+{
+    MiniTest::Case("VIF1ContiguousUnpack", [](TestCase &tc)
+    {
+        tc.Run("normal-mode lanes preserve wrap TOPS sign and packet boundaries", [](TestCase &t)
+        {
+            PS2Memory memory;
+            t.IsTrue(memory.initialize(), "memory initialization");
+            const uint32_t words[12] = {0x11223344u,0xaabbccddu,0x80000001u,0x7fffffffu,
+                0x10203040u,0xfedcba98u,0u,0xffffffffu,0x55667788u,0x01020304u,0x8899aabbu,0xccddeeffu};
+            const uint8_t bytes[12] = {0x80,0x7f,0xff,0,1,2,3,4,0xfe,0x81,0x55,0xaa};
+            const uint32_t mark = 0x0700a55au;
+            for (const unsigned format : {0u,4u,8u,12u,14u})
+            for (const unsigned mode : {0u,3u})
+            for (const bool zeroExtend : {false,true})
+            for (const bool useTops : {false,true})
+            for (const bool fragmented : {false,true})
+            {
+                std::memset(memory.getVU1Data(),0x5a,PS2_VU1_DATA_SIZE);
+                memory.vif1_regs={};
+                memory.vif1_regs.cycle=0x0101u;
+                memory.vif1_regs.mode=mode;
+                memory.vif1_regs.tops=128u;
+                for (unsigned lane=0;lane<4u;++lane) memory.vif1_regs.row[lane]=0xa000u+lane;
+                const uint16_t immediate=uint16_t(1023u|(zeroExtend?0x4000u:0u)|(useTops?0x8000u:0u));
+                std::vector<uint8_t> packet;
+                appendU32(packet,makeVifCmd(uint8_t(0x60u|format),3u,immediate));
+                const unsigned components=(format>>2u)+1u;
+                if(format==14u)packet.insert(packet.end(),bytes,bytes+12u);
+                else for(unsigned i=0;i<3u*components;++i)appendU32(packet,words[i]);
+                appendU32(packet,mark);
+                std::vector<uint8_t> expected(PS2_VU1_DATA_SIZE,0x5a);
+                for(unsigned vector=0;vector<3u;++vector)
+                {
+                    uint32_t lanes[4]{};
+                    if(format==0u) lanes[0]=lanes[1]=lanes[2]=lanes[3]=words[vector];
+                    else if(format==4u){lanes[0]=lanes[2]=words[vector*2u];lanes[1]=lanes[3]=words[vector*2u+1u];}
+                    else if(format==8u){for(unsigned lane=0;lane<3u;++lane)lanes[lane]=words[vector*3u+lane];lanes[3]=vector<2u?words[(vector+1u)*3u]:(fragmented?0u:mark);}
+                    else if(format==12u){for(unsigned lane=0;lane<4u;++lane)lanes[lane]=words[vector*4u+lane];}
+                    else for(unsigned lane=0;lane<4u;++lane)lanes[lane]=zeroExtend?uint32_t(bytes[vector*4u+lane]):uint32_t(int32_t(int8_t(bytes[vector*4u+lane])));
+                    const unsigned address=(1023u+(useTops?128u:0u)+vector)&1023u;
+                    std::memcpy(expected.data()+address*16u,lanes,sizeof(lanes));
+                }
+                if(fragmented){memory.processVIF1Data(packet.data(),5u);memory.processVIF1Data(packet.data()+5u,uint32_t(packet.size()-5u));}
+                else memory.processVIF1Data(packet.data(),uint32_t(packet.size()));
+                t.IsTrue(std::memcmp(memory.getVU1Data(),expected.data(),expected.size())==0,
+                    "full VU memory: format="+std::to_string(format)+" mode="+std::to_string(mode)+
+                    " unsigned="+std::to_string(zeroExtend)+" TOPS="+std::to_string(useTops)+" split="+std::to_string(fragmented));
+                t.Equals(memory.vif1_regs.mark,0xa55au,"following MARK command");
+                for(unsigned lane=0;lane<4u;++lane)t.Equals(memory.vif1_regs.row[lane],0xa000u+lane,"normal mode preserves ROW");
+            }
+        });
+    });
+}
+
 void register_ps2_memory_tests()
 {
+    register_vif1_contiguous_unpack_tests();
     register_ps2_mfifo_empty_tests();
     MiniTest::Case("PS2Memory", [](TestCase &tc)
     {
