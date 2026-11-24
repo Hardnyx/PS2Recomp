@@ -2534,7 +2534,8 @@ uint32_t PS2Memory::readIORegister(uint32_t address)
 
     if (address >= 0x10000000 && address < 0x10010000)
     {
-        if (address >= 0x10008000 && address < 0x1000F000)
+        // D_CTRL and later DMAC globals are not channel CHCR registers.
+        if (address >= 0x10008000 && address < 0x1000E000)
         {
             if ((address & 0xFF) == 0x00)
             {

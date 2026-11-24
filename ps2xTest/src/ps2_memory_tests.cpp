@@ -258,7 +258,9 @@ void register_ps2_memory_tests()
             mem.writeIORegister(kVif1Ch, 0x100u);
             t.Equals(mem.readIORegister(kVif1Ch + 0x20u), 1u,
                      "explicit DMAE=0 must block the transfer");
-            mem.writeIORegister(kDctrl, 1u);
+            mem.writeIORegister(kDctrl, 0x101u);
+            t.Equals(mem.readIORegister(kDctrl), 0x101u,
+                     "a D_CTRL read must preserve controller bits, including bit 8");
             mem.writeIORegister(kVif1Ch, 0x100u);
             t.Equals(mem.readIORegister(kVif1Ch + 0x20u), 0u,
                      "explicit DMAE=1 must permit the transfer");
